@@ -36,7 +36,18 @@ roslaunch xchu_slam  mapping.launch
 rosbag play kitti_2011_10_03_drive_0027_synced.bag --clock -r 0.1
 ```
 
-  3.ctrl+c关闭终端则自动保存地图
+   3.ctrl+c关闭终端则自动保存地图到xchu_slam/pcd中
+
+### 重要参数
+
+- keyframe_dist：关键帧的选取距离，太近容易重影，太远丢失细节
+- surround_search_num：locamap的点云帧数量，太大导致拼localmap时效率变慢，精度却不一定变好
+- use_odom: 是否使用编码器，在launch文件中可修改
+- use_imu：是否使用imu，在launch中修改，可同时支持imu和编码器
+- history_search_num_： 回环检测时选取的邻域内的点云帧数量
+
+其余参数应该默认就可以了，不需要自行修改。
+
 
 ## Issues
 
