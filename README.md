@@ -4,9 +4,15 @@
 
 基于NDT的里程计，利用imu、编码器来优化初始位姿估计。
 
-回环，参考LEGO-LOAM。
+GPS_ODOM：简单的全局odom，采用gnss作为位置，姿态为距离GNSS帧最近的imu帧的姿态。
 
-![image-20201124154817082](README/image-20201124154817082.png)
+后端优化：取协方差较小的GPS位置加入因子图中（目前还有点bug）。
+
+回环检测：参考LEGO-LOAM。
+
+如下图，绿色表示GNSS轨迹，蓝色表示雷达odom
+
+![image-20201126140527198](README/image-20201126140527198.png)
 
 ![image-20201125123654379](README/image-20201125123654379.png)
 

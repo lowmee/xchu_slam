@@ -1,11 +1,14 @@
 /**
- * @file xchu_slam.h
- * @author xchu
- * 
- */
+* @Program: Project
+* @Description: [用一句话描述此类]
+* @Author: Xiangcheng Hu
+* @Create: 2020/11/25
+* @Copyright: [2020] <Copyright hxc@2022087641@qq.com>
+**/
 
-#ifndef __XCHUSlam__
-#define __XCHUSlam__
+
+#ifndef SRC_XCHU_SLAM_SRC_MAP_OPTIMIZATION_H_
+#define SRC_XCHU_SLAM_SRC_MAP_OPTIMIZATION_H_
 
 #include <iostream>
 #include <sstream>
@@ -24,7 +27,6 @@
 #include <tf/transform_broadcaster.h>
 #include <tf/transform_listener.h>
 #include <sensor_msgs/PointCloud2.h>
-#include <sensor_msgs/NavSatFix.h>
 #include <sensor_msgs/Imu.h>
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
 #include <nav_msgs/Odometry.h>
@@ -32,8 +34,6 @@
 
 #include <ndt_cpu/NormalDistributionsTransform.h>
 #include <xchu_slam/ground_filter.hpp>
-#include <xchu_slam/gpsTools.h>
-
 #include <pclomp/ndt_omp.h>
 
 #include <pcl/point_types.h>
@@ -58,40 +58,7 @@
 #include <gtsam/nonlinear/Values.h>
 #include <gtsam/nonlinear/ISAM2.h>
 
-#include <gtsam/navigation/GPSFactor.h>
-#include <gtsam/navigation/ImuFactor.h>
-#include <gtsam/navigation/CombinedImuFactor.h>
-
 using namespace gtsam;
-
-struct POSE {
-  float x;
-  float y;
-  float z;
-  float roll;
-  float pitch;
-  float yaw;
-  Eigen::Matrix4f t;
-
-  POSE() {
-    init();
-  }
-
-  void init() {
-    x = y = z = 0.0;
-    roll = pitch = yaw = 0.0;
-    t.setIdentity();
-  }
-
-  void updateT() {
-    t.setIdentity();
-    Eigen::Translation3d tf_trans(x, y, z);
-    Eigen::AngleAxisd rot_x(roll, Eigen::Vector3d::UnitX());
-    Eigen::AngleAxisd rot_y(pitch, Eigen::Vector3d::UnitY());
-    Eigen::AngleAxisd rot_z(yaw, Eigen::Vector3d::UnitZ());
-    t = (tf_trans * rot_z * rot_y * rot_x).matrix().cast<float>();
-  }
-};
 
 struct PointXYZIRPYT {
   PCL_ADD_POINT4D
@@ -115,137 +82,48 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(PointXYZIRPYT,
 using PointTPose = PointXYZIRPYT;
 using PointT = pcl::PointXYZI;
 
-class XCHUSlam {
+
+class MapOptimization {
  public:
-  XCHUSlam(ros::NodeHandle nh, ros::NodeHandle pnh);
+  MapOptimization(ros::NodeHandle nh, ros::NodeHandle pnh);
 
-  ~XCHUSlam();
+  ~MapOptimization();
 
-  /**
-   * 可视化线程
-   */
+  void run();
+
   void visualThread();
 
-  /**
-   * 回环检测线程
-   */
   void loopClosureThread();
 
-  /**
-   * 保存全局地图
-   */
-  void transformAndSaveFinalMap();
+  void TransformAndSaveFinalMap();
 
  private:
 
   bool init();
 
-  /**
-   * 编码器数据处理
-   * @param msg
-   */
+  void adjustDistortion(pcl::PointCloud<PointT>::Ptr &cloud, double scan_time);
+
+  void extractLocalmap();
+
+  void process_cloud(const pcl::PointCloud<pcl::PointXYZI> &tmp, const ros::Time &current_scan_time);
+
+  bool saveKeyframesAndFactor();
+
+  void publishKeyposesAndFrames();
+
   void odomCB(const nav_msgs::OdometryConstPtr &msg);
 
-  /**
-   * 点云数据callback
-   */
   void pcCB(const sensor_msgs::PointCloud2ConstPtr &msg);
 
   void pcCB2(const sensor_msgs::PointCloud2ConstPtr &msg);
 
-  /**
-   * IMU数据处理
-   */
   void imuCB(const sensor_msgs::ImuConstPtr &msg);
 
-  /**
-   * GPS数据处理
-   * @param msg
-   */
-  void gpsCB(const nav_msgs::OdometryConstPtr &msg);
-
-  /**
-   * 处理点云数据
-   */
-  void processCloud(const pcl::PointCloud<PointT> &tmp, const ros::Time &scan_time);
-
-  /**
-   * 点云去畸变,参考loam,基于匀速运动假设
-   */
-  void adjustDistortion(pcl::PointCloud<PointT>::Ptr &cloud, double scan_time);
-
-  /**
-   * 提取和更新局部地图
-   * 使用autoware cpu_ndt时可以通过updateVoxelGrid更新target map
-   */
-  void extractLocalmap();
-
-  /**
-   * 保存关键帧和更新因子图
-   * 移动距离作为关键帧选取标准
-   */
-  bool saveKeyframesAndFactor();
-
-  /**
-   * 可视化线程中发布关键帧和全局地图
-   */
-  void publishKeyposesAndFrames();
-
-  /**
-   * @brief 回环检测及位姿图更新
-   * 利用欧氏距离、里程距离、时间作为筛选条件，找到最近的关键帧，并拼接前后的N帧作为localmap
-   * 最后ICP匹配添加回环约束
-   */
   void performLoopClosure();
 
-  /**
-   * @brief 基于里程计的回环检测，
-   * 直接提取当前位姿附近(radiusSearch)的 keyframe作为icp的target
-   */
   bool detectLoopClosure();
 
-  /**
-   * 检测到回环后执行回环优化修正位姿及target map
-   */
   void correctPoses();
-
-  void imuOdomCalc(ros::Time current_time);
-
-  void imuCalc(ros::Time current_time);
-
-  void odomCalc(ros::Time current_time);
-
-  void imuUpSideDown(sensor_msgs::Imu &input);
-
-  void addGPSFactor();
-
-  float pointDistance(PointT p) {
-    return sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
-  }
-
-  float pointDistance(PointT p1, PointT p2) {
-    return sqrt((p1.x - p2.x) * (p1.x - p2.x) + (p1.y - p2.y) * (p1.y - p2.y) + (p1.z - p2.z) * (p1.z - p2.z));
-  }
-
-  inline double warpToPm(double a_num, const double a_max) {
-    if (a_num >= a_max) {
-      a_num -= 2.0 * a_max;
-    }
-    return a_num;
-  }
-
-  inline double warpToPmPi(double a_angle_rad) {
-    return warpToPm(a_angle_rad, M_PI);
-  }
-
-  inline double calcDiffForRadian(const double lhs_rad, const double rhs_rad) {
-    double diff_rad = lhs_rad - rhs_rad;
-    if (diff_rad >= M_PI)
-      diff_rad = diff_rad - 2 * M_PI;
-    else if (diff_rad < -M_PI)
-      diff_rad = diff_rad + 2 * M_PI;
-    return diff_rad;
-  }
 
   void setGeometryOrient(geometry_msgs::PoseWithCovarianceStamped &msg, float w, float x, float y, float z) {
     msg.pose.pose.orientation.w = w;
@@ -282,49 +160,35 @@ class XCHUSlam {
   ros::Subscriber sub_pc_;
   ros::Subscriber sub_odom_;
   ros::Subscriber sub_imu_;
-  ros::Subscriber sub_gps_;
 
   ros::Publisher pub_keyposes_;
   ros::Publisher pub_globalmap_;
 
   ros::Publisher pub_undistorted_pc_;
-  ros::Publisher pub_predict_odom_;
-  ros::Publisher pub_final_odom_;
+  ros::Publisher pub_predict_pose_;
+  ros::Publisher pub_updated_pose_;
 
   ros::Publisher pub_history_keyframes_;
   ros::Publisher pub_icp_keyframes_;
   ros::Publisher pub_localmap_, pub_current_frames_;
 
+  ros::ServiceServer srv_save_map_;
   utils::RayGroundFilter ground_filter;
 
   tf::TransformBroadcaster tf_broadcaster_;
+  tf::TransformListener tf_listener_;
   tf::Transform tf_m2o_;
   tf::Transform tf_o2b_;
-
-  bool imu_upside_down_ = false;
 
   // gtsam 相关
   NonlinearFactorGraph gtSAMgraph_;
   Values initial_estimate_;
   ISAM2 *isam;
   Values isam_current_estimate_;
-  Eigen::MatrixXd poseCovariance;
 
   noiseModel::Diagonal::shared_ptr prior_noise_;
   noiseModel::Diagonal::shared_ptr odom_noise_;
   noiseModel::Diagonal::shared_ptr constraint_noise_;
-
-  // GPS Settings
-  bool useImuHeadingInitialization;
-  bool useGpsElevation;
-  float gpsCovThreshold;
-  float poseCovThreshold;
-
-  std::deque<nav_msgs::Odometry> gps_deque_;
-  bool init_pose_ = false;
-
-  gpsTools gtools;
-  double origin_latitude = 0.0, origin_longitude = 0.0, origin_altitude = 0.0;
 
   // imu 相关
   static const int imu_queue_len_ = 100;
@@ -357,10 +221,9 @@ class XCHUSlam {
   std::array<float, imu_queue_len_> imu_angular_rot_z_;
 
   // 里程计相关
-//  int odom_ptr_front_, odom_ptr_last_, odom_ptr_last_iter_;
-//  std::array<nav_msgs::Odometry, imu_queue_len_> odom_queue_;
-//  nav_msgs::Odometry pre_odom_, cur_odom_;
-
+  int odom_ptr_front_, odom_ptr_last_, odom_ptr_last_iter_;
+  std::array<nav_msgs::Odometry, imu_queue_len_> odom_queue_;
+  nav_msgs::Odometry pre_odom_, cur_odom_;
 
   std::queue<sensor_msgs::PointCloud2> cloudBuf;
   std::mutex mutex_lock;
@@ -368,42 +231,12 @@ class XCHUSlam {
   std::string _imu_topic;  // 定义imu消息的topic
   std::string _odom_topic;
   std::string _lidar_topic;
-  std::string _gps_topic;
-
-  // pose相关
-  POSE previous_pose, guess_pose, guess_pose_imu, guess_pose_odom, guess_pose_imu_odom, diff_pose, diff_imu_pose,
-      diff_odom_pose, diff_imu_odom_pose;
-  POSE current_pose, current_pose_imu, current_pose_odom, current_pose_imu_odom, init_pose;
-  POSE added_pose;  //  added_pose记录点云加入地图时候的位置         // 初始设为0即可,因为第一帧如论如何也要加入地图的
-
-  Eigen::Matrix4f pre_pose_, guess_pose_, guess_pose_imu_, guess_pose_odom_, guess_pose_imu_odom_;
-  Eigen::Matrix4f current_pose_, current_pose_imu_, current_pose_odom_, current_pose_imu_odom_;
-  Eigen::Matrix4f ndt_pose_, localizer_pose_, added_pose_;
-
-  ros::Time current_scan_time;
-  ros::Time previous_scan_time;
-  ros::Duration scan_duration;
-
-  // 设置变量,用以接受imu和odom消息
-  sensor_msgs::Imu imu;
-  nav_msgs::Odometry odom;
-  std::vector<sensor_msgs::ImuConstPtr> imu_data;
-
-  // 定义速度值 --包括实际速度值,和imu取到的速度值
-  double current_velocity_x;
-  double current_velocity_y;
-  double current_velocity_z;
-
-  double current_velocity_imu_x;
-  double current_velocity_imu_y;
-  double current_velocity_imu_z;
 
   // ndt 相关
   geometry_msgs::PoseWithCovarianceStamped pre_pose_ndt_, cur_pose_ndt_;
   geometry_msgs::PoseWithCovarianceStamped pre_keypose_;
   geometry_msgs::PoseWithCovarianceStamped predict_pose_;
-  Eigen::Matrix4f pre_pose_m_, cur_pose_m_, pre_pose_o_, cur_pose_o_, diff_pose_;
-  Eigen::Matrix4f t_base_link;
+  Eigen::Matrix4f pre_pose_m_, cur_pose_m_, pre_pose_o_, cur_pose_o_;
   Eigen::Matrix4f final_transformation_;
   double fitness_score_;
   bool has_converged_;
@@ -411,6 +244,8 @@ class XCHUSlam {
 
   cpu::NormalDistributionsTransform<PointT, PointT> cpu_ndt_;
   pclomp::NormalDistributionsTransform<pcl::PointXYZI, pcl::PointXYZI>::Ptr ndt_omp_;
+
+  pcl::VoxelGrid<PointT> voxel_filter_;
 
   pcl::PointCloud<PointT>::Ptr pc_source_;
   pcl::PointCloud<PointT>::Ptr pc_target_;
@@ -425,9 +260,11 @@ class XCHUSlam {
   std::vector<int> search_idx_;
   std::vector<float> search_dist_;
 
+  pcl::VoxelGrid<PointT> ds_source_;
+  pcl::VoxelGrid<PointT> ds_history_keyframes_;
+
   // 回环检测相关
-  bool loop_closed_ = false;
-  bool aLoopIsClosed = false;
+  bool loop_closed_;
   int latest_history_frame_id_;
   int closest_history_frame_id_;
   pcl::PointCloud<PointT>::Ptr latest_keyframe_;
@@ -437,9 +274,10 @@ class XCHUSlam {
 
   // 参数相关
   float scan_period_;
-  bool use_odom_, use_imu_, use_gps_;
+  bool use_odom_, use_imu_;
   float keyframe_dist_; // 移动距离作为关键帧提取参考
-  Eigen::Matrix4f tf_b2l_ = Eigen::Matrix4f::Identity();
+  bool loop_closure_enabled_;
+  Eigen::Matrix4f tf_b2l_;
   int surround_search_num_;      // 提取附近点云
   float surround_search_radius_; // kdtree 搜索参数
   float voxel_leaf_size_;        // 对地图点云进行降采样
@@ -455,11 +293,17 @@ class XCHUSlam {
 
   std::string save_dir_;
 
+  pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterCorner;
+  pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterSurf;
+  pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterOutlier;
+  pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterHistoryKeyFrames; // for histor key frames of loop closure
+  pcl::VoxelGrid<pcl::PointXYZI>
+      downSizeFilterSurroundingKeyPoses; // for surrounding key poses of scan-to-map optimization
   pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterGlobalMap; // for global map visualization
   pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterGlobalMapKeyFrames; // for global map visualization
+  pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterRecentKeyFrames; // for global map visualization
   pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterLocalmap; // for global map visualization
-  pcl::VoxelGrid<PointT> downSizeFilterSource;
-  pcl::VoxelGrid<PointT> downSizeFilterHistoryKeyframes;
+
 };
 
-#endif
+#endif //SRC_XCHU_SLAM_SRC_MAP_OPTIMIZATION_H_
