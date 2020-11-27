@@ -20,7 +20,7 @@
     <!-- <include file="$(find odom_imu)/launch/odom_imu.launch" /> -->
 
     <node pkg="xchu_slam" type="gnss_odom_node" name="gnss_odom_node" output="screen">
-        <param name="imu_topic" value="/imu/data" type="string"/>
+        <!--        <param name="imu_topic" value="/imu/data" type="string"/>-->
         <param name="imu_topic" value="/kitti/oxts/imu" type="string"/>
         <param name="gps_topic" value="/kitti/oxts/gps/fix" type="string"/>
         <param name="use_localmap" value="false" type="bool"/> <!--是否使用点云地图原点 true表示不使用-->
@@ -49,6 +49,9 @@
         <!--        <param name="lidar_topic" value="/top/rslidar_points" type="str"/>-->
         <!--        <param name="gps_topic" value="/novatel718d/pos" type="str"/>-->
         <param name="gps_topic" value="/kitti/oxts/gps/fix" type="str"/>
+
+        <param name="max_localmap_size" value="30" type="double"/>
+        <param name="min_add_scan_shift" value="0.5" type="double"/>
     </node>
 
 </launch>

@@ -46,7 +46,6 @@ link_directories(lib)
 
 add_executable(xchu_mapping_node
         src/xchu_slam.cpp
-        include/xchu_slam/gpsTools.cpp
         )
 
 target_link_libraries(xchu_mapping_node
@@ -64,18 +63,3 @@ add_executable(gnss_odom_node
         include/xchu_slam/gpsTools.cpp)
 target_link_libraries(gnss_odom_node ${catkin_LIBRARIES})
 
-
-#[[
-add_executable(map_optimatization_node
-        src/map_optimization.cpp
-        )
-
-target_link_libraries(map_optimatization_node
-        ${catkin_LIBRARIES}
-        ${PCL_LIBRARIES}
-        ${GTSAM_LIBRARIES}
-        gtsam
-        ndt_gpu
-        ndt_cpu
-        ndt_omp
-        )]]

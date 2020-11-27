@@ -25,30 +25,16 @@
 
 class GNSSOdom {
  public:
-  static inline double deg2rad(const double &deg) {
-    return deg * DEG_TO_RAD;
-  };
-  static inline double wrapToPmPi(double a_angle_rad) {
-    if (a_angle_rad >= M_PI) {
-      a_angle_rad -= 2.0 * M_PI;
-    }
-    return a_angle_rad;
-  }
+
 
   GNSSOdom(ros::NodeHandle &node_handle);
 
   /**
    * gps odom主流程
    */
-  void MainLoop();
+  void run();
 
  private:
-  /**
-   * IMU方向调整
-   * @param input
-   */
-  void imuUpsideDown(const sensor_msgs::Imu::Ptr &input);
-
   /**
    * IMU callback
    * @param msg
@@ -61,15 +47,27 @@ class GNSSOdom {
    */
   void GNSSCB(const sensor_msgs::NavSatFixConstPtr &msg);
 
+  /**
+   * IMU姿态补偿
+   * @param input
+   */
+  void imuUpsideDown(const sensor_msgs::Imu::Ptr &input);
 
-  //void InsCallBack(const novatel_gps_msgs::InspvaxConstPtr &msg);
-  //void BestUtmCallBack(const novatel_gps_msgs::NovatelUtmPositionConstPtr &msg);
+  static inline double deg2rad(const double &deg) {
+    return deg * DEG_TO_RAD;
+  };
+
+  static inline double wrapToPmPi(double a_angle_rad) {
+    if (a_angle_rad >= M_PI) {
+      a_angle_rad -= 2.0 * M_PI;
+    }
+    return a_angle_rad;
+  }
+
 
   ros::NodeHandle nh_;
-  ros::Publisher insOdomPub_;
-  ros::Publisher utmOdomPub_;
-  ros::Publisher gpsOdomPub_;
-  ros::Subscriber imuSub_, gpsSub_;
+  ros::Publisher gps_odom_pub_;
+  ros::Subscriber imu_sub_, gps_sub_;
 
   std::string imu_topic, ins_topic, bestutm_topic, gps_topic;
 

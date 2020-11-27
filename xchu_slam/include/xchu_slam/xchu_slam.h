@@ -32,7 +32,6 @@
 
 #include <ndt_cpu/NormalDistributionsTransform.h>
 #include <xchu_slam/ground_filter.hpp>
-#include <xchu_slam/gpsTools.h>
 
 #include <pclomp/ndt_omp.h>
 
@@ -115,6 +114,8 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(PointXYZIRPYT,
 using PointTPose = PointXYZIRPYT;
 using PointT = pcl::PointXYZI;
 
+static double max_localmap_size = 30.0, odom_size = 0.0, localmap_size = 0.0;
+
 class XCHUSlam {
  public:
   XCHUSlam(ros::NodeHandle nh, ros::NodeHandle pnh);
@@ -179,6 +180,8 @@ class XCHUSlam {
    * 使用autoware cpu_ndt时可以通过updateVoxelGrid更新target map
    */
   void extractLocalmap();
+
+  void updateLocalmap();
 
   /**
    * 保存关键帧和更新因子图
@@ -316,15 +319,12 @@ class XCHUSlam {
 
   // GPS Settings
   bool useImuHeadingInitialization;
-  bool useGpsElevation;
+  bool useGpsElevation = false;
   float gpsCovThreshold;
   float poseCovThreshold;
 
   std::deque<nav_msgs::Odometry> gps_deque_;
-  bool init_pose_ = false;
-
-  gpsTools gtools;
-  double origin_latitude = 0.0, origin_longitude = 0.0, origin_altitude = 0.0;
+  bool system_initialized_ = false;
 
   // imu 相关
   static const int imu_queue_len_ = 100;
@@ -414,6 +414,7 @@ class XCHUSlam {
 
   pcl::PointCloud<PointT>::Ptr pc_source_;
   pcl::PointCloud<PointT>::Ptr pc_target_;
+  pcl::PointCloud<PointT>::Ptr localmap_ptr;
 
   pcl::PointCloud<PointT>::Ptr cloud_keyposes_3d_;
   pcl::PointCloud<PointTPose>::Ptr cloud_keyposes_6d_;
@@ -422,12 +423,10 @@ class XCHUSlam {
 
   pcl::KdTreeFLANN<PointT>::Ptr kdtree_poses_;
 
-  std::vector<int> search_idx_;
-  std::vector<float> search_dist_;
+
 
   // 回环检测相关
   bool loop_closed_ = false;
-  bool aLoopIsClosed = false;
   int latest_history_frame_id_;
   int closest_history_frame_id_;
   pcl::PointCloud<PointT>::Ptr latest_keyframe_;
@@ -435,6 +434,10 @@ class XCHUSlam {
   std::deque<pcl::PointCloud<PointT>::Ptr> recent_keyframes_;
   std::mutex mtx_;
 
+  // 地图相关
+  pcl::PointCloud<PointT> localmap, submap;  // 此处定义地图  --global map
+  double min_add_scan_shift = 0.5;  // 点云添加到locaMap里的最小间隔值
+  double distance_shift = 0.0;
   // 参数相关
   float scan_period_;
   bool use_odom_, use_imu_, use_gps_;
