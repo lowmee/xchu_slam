@@ -142,6 +142,10 @@ class XCHUSlam {
   bool init();
 
   /**
+   * 系统初始化, 主要利用GPS
+   */
+  bool systemInit(const ros::Time &stamp);
+  /**
    * 编码器数据处理
    * @param msg
    */
@@ -179,7 +183,9 @@ class XCHUSlam {
    * 提取和更新局部地图
    * 使用autoware cpu_ndt时可以通过updateVoxelGrid更新target map
    */
-  void extractLocalmap();
+  void extractLocalmapByNumer();
+
+  void extractLocalmapByDistance();
 
   void updateLocalmap();
 
@@ -423,8 +429,6 @@ class XCHUSlam {
 
   pcl::KdTreeFLANN<PointT>::Ptr kdtree_poses_;
 
-
-
   // 回环检测相关
   bool loop_closed_ = false;
   int latest_history_frame_id_;
@@ -433,9 +437,12 @@ class XCHUSlam {
   pcl::PointCloud<PointT>::Ptr near_history_keyframes_;
   std::deque<pcl::PointCloud<PointT>::Ptr> recent_keyframes_;
   std::mutex mtx_;
+  int near_key_id_ = 0;
 
   // 地图相关
-  pcl::PointCloud<PointT> localmap, submap;  // 此处定义地图  --global map
+  pcl::PointCloud<PointT> localmap, pre_localmap;  // 此处定义地图  --global map
+  pcl::PointCloud<PointT>::Ptr near_localmap_;
+
   double min_add_scan_shift = 0.5;  // 点云添加到locaMap里的最小间隔值
   double distance_shift = 0.0;
   // 参数相关
