@@ -12,9 +12,15 @@
   
 - 后端优化：取协方差较小的GPS位置加入因子图中（目前存在点bug，已注释）。
 
-- 回环检测：邻域距离搜索+ICP匹配。
+- 回环检测：两种方法，2在laucnh文件中可选择开启
+
+  1.传统的邻域距离搜索+ICP匹配。
+
+  2.基于scan context的回环检测。
 
 ![TIM图片20201127144515](README/TIM%E5%9B%BE%E7%89%8720201127144515.png)
+
+![TIM图片20201129022429](README/TIM%E5%9B%BE%E7%89%8720201129022429.png)
 
 ## Dependency
 
@@ -45,6 +51,7 @@ rosbag play kitti_2011_10_03_drive_0027_synced.bag --clock -r 0.1
 - use_odom: 是否使用编码器，在launch文件中可修改
 - use_imu：是否使用imu，在launch中修改，可同时支持imu和编码器
 - use_gps: 是否使用GPS初始化，是否在后端优化中引入GPS factor.
+- use_sc_detect: 是否使用scan context进行回环检测
 - history_search_num_： 回环检测时选取的邻域内的点云帧数量
 
 其余参数应该默认就可以了，不需要自行修改。
@@ -73,6 +80,8 @@ rosbag play kitti_2011_10_03_drive_0027_synced.bag --clock -r 0.1
 ![image-20201125061617522](README/image-20201125061617522.png)
 
 ### 更新说明
+
+**11.30**：引入scan context回环检测方法，并可视化scan context特征图像。
 
 **11.29**：1.0稳定版，gtsam的bug依然存在，但已注释掉。此外优化时间同步。
 

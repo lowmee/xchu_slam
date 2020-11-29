@@ -31,7 +31,6 @@
 #include <std_srvs/Empty.h>
 
 #include <ndt_cpu/NormalDistributionsTransform.h>
-#include <xchu_slam/ground_filter.hpp>
 
 #include <pclomp/ndt_omp.h>
 
@@ -47,6 +46,10 @@
 #include <Eigen/Core>
 #include <Eigen/Geometry>
 
+//opencv
+#include <opencv2/highgui/highgui.hpp>
+#include <opencv2/imgproc/imgproc.hpp>
+
 #include <gtsam/geometry/Rot3.h>
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/slam/PriorFactor.h>
@@ -60,6 +63,9 @@
 #include <gtsam/navigation/GPSFactor.h>
 #include <gtsam/navigation/ImuFactor.h>
 #include <gtsam/navigation/CombinedImuFactor.h>
+
+#include "scan_context/Scancontext.h"
+#include <xchu_slam/ground_filter.hpp>
 
 using namespace gtsam;
 
@@ -135,7 +141,7 @@ class XCHUSlam {
   /**
    * 保存全局地图
    */
-  void transformAndSaveFinalMap();
+  void saveFinalMap();
 
  private:
 
@@ -186,8 +192,6 @@ class XCHUSlam {
   void extractLocalmapByNumer();
 
   void extractLocalmapByDistance();
-
-  void updateLocalmap();
 
   /**
    * 保存关键帧和更新因子图
@@ -302,7 +306,7 @@ class XCHUSlam {
 
   ros::Publisher pub_history_keyframes_;
   ros::Publisher pub_icp_keyframes_;
-  ros::Publisher pub_localmap_, pub_current_frames_;
+  ros::Publisher pub_localmap_, pub_current_frames_, pub_sc_;
 
   utils::RayGroundFilter ground_filter;
 
@@ -421,6 +425,8 @@ class XCHUSlam {
   pcl::PointCloud<PointT>::Ptr pc_source_;
   pcl::PointCloud<PointT>::Ptr pc_target_;
   pcl::PointCloud<PointT>::Ptr localmap_ptr;
+  pcl::PointCloud<PointT> raw_cloud;
+  pcl::PointCloud<PointT>::Ptr crop_cloud_;
 
   pcl::PointCloud<PointT>::Ptr cloud_keyposes_3d_;
   pcl::PointCloud<PointTPose>::Ptr cloud_keyposes_6d_;
@@ -438,6 +444,15 @@ class XCHUSlam {
   std::deque<pcl::PointCloud<PointT>::Ptr> recent_keyframes_;
   std::mutex mtx_;
   int near_key_id_ = 0;
+  bool potentialLoopFlag = false;
+  bool use_sc_ = false;
+
+  // scan context回环检测
+  pcl::PointCloud<PointT>::Ptr sc_near_history_keyframes_;
+  pcl::PointCloud<PointT>::Ptr sc_latest_keyframe_; // giseop, SC: scan context
+  int sc_closest_history_frame_id_ = -1; // giseop
+  float yaw_diff = 0.0;
+  SC2::SCManager scManager;
 
   // 地图相关
   pcl::PointCloud<PointT> localmap, pre_localmap;  // 此处定义地图  --global map
@@ -445,6 +460,7 @@ class XCHUSlam {
 
   double min_add_scan_shift = 0.5;  // 点云添加到locaMap里的最小间隔值
   double distance_shift = 0.0;
+
   // 参数相关
   float scan_period_;
   bool use_odom_, use_imu_, use_gps_;
