@@ -42,7 +42,11 @@ roslaunch xchu_slam  mapping.launch
 rosbag play kitti_2011_10_03_drive_0027_synced.bag --clock -r 0.1
 ```
 
-   3.ctrl+c关闭终端则自动保存地图到xchu_slam/pcd中
+   3.ctrl+c关闭终端则自动保存地图到xchu_slam/pcd中，或者执行rosservice
+
+```bash
+rosservice call /save_map 
+```
 
 ### 重要参数
 
@@ -78,6 +82,14 @@ rosbag play kitti_2011_10_03_drive_0027_synced.bag --clock -r 0.1
 高度上偏移纠正回来了。
 
 ![image-20201125061617522](README/image-20201125061617522.png)
+
+### Reference
+
+- **LEGO-LOAM/SC-LEGO LOAM**
+- **SCAN CONTEXT**
+- **LIO SAM**
+- **AUTOWARE**
+- **NDT_OMP**
 
 ### 更新说明
 
