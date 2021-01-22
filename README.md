@@ -100,5 +100,3 @@ rosservice call /save_map
 **11.28**：引入GNSS初始化，改进里程计精度，红色为因子图增量平滑后的关键帧位姿，绿色为GNSS轨迹，蓝色为激光雷达odom
 
 ![image-20201128100931867](README/image-20201128100931867.png)因子图加入gps factor时，gtsam会报错，原因不明，可以设置use_gps = false：
-
-![image-20201127144138995](README/image-20201127144138995.png)
