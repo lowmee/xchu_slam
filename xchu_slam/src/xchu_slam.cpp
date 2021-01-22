@@ -6,27 +6,28 @@
 #include "xchu_slam/xchu_slam.h"
 
 int main(int argc, char **argv) {
-  ros::init(argc, argv, "map_node");
+  ros::init(argc, argv, "slam_node");
 
   ros::NodeHandle nh, pnh("~");
-  XCHUSLAM *map = new XCHUSLAM(nh, pnh);
+  XCHUSLAM *slam = new XCHUSLAM(nh, pnh);
 
-  std::thread visual_thread(&XCHUSLAM::visualThread, map);
-  std::thread loop_thread(&XCHUSLAM::loopClosureThread, map);
+  // 这俩线程用来进行可视化和后端优化
+  std::thread visual_thread(&XCHUSLAM::visualThread, slam);
+  std::thread loop_thread(&XCHUSLAM::loopClosureThread, slam);
 
   ros::Rate rate(200);
   while (ros::ok()) {
     ros::spinOnce();
     rate.sleep();
   }
+  // 关闭终端的时候也要销毁子线程
   loop_thread.join();
   visual_thread.join();
   return 0;
 }
 
 XCHUSLAM::XCHUSLAM(ros::NodeHandle nh, ros::NodeHandle pnh) : nh_(nh), pnh_(pnh) {
-
-  // 初始化gtsam参数
+  // 各种参数初始化
   if (!init()) {
     ROS_ERROR("init failed...");
     exit(-1);
@@ -34,45 +35,45 @@ XCHUSLAM::XCHUSLAM(ros::NodeHandle nh, ros::NodeHandle pnh) : nh_(nh), pnh_(pnh)
 
   // publisher
   pub_keyposes_ = nh_.advertise<sensor_msgs::PointCloud2>("/keyposes", 1);  // 关键帧点云
-  pub_laser_cloud_surround_ = nh_.advertise<sensor_msgs::PointCloud2>("/globalmap", 1);
-  pub_recent_keyframes_ = nh_.advertise<sensor_msgs::PointCloud2>("/localmap", 1);
+  pub_globalmap_ = nh_.advertise<sensor_msgs::PointCloud2>("/globalmap", 1);
+  pub_localmap_ = nh_.advertise<sensor_msgs::PointCloud2>("/localmap", 1);
   pub_undistorted_pc_ = nh_.advertise<sensor_msgs::PointCloud2>("/undistorted_pc", 1);
-  pub_current_odom_ = nh_.advertise<nav_msgs::Odometry>("/current_odom", 100);
-  pub_current_points_ = nh_.advertise<sensor_msgs::PointCloud2>("/current_points", 10);
+  pub_current_odom_ = nh_.advertise<nav_msgs::Odometry>("/current_odom", 1);
+  pub_current_points_ = nh_.advertise<sensor_msgs::PointCloud2>("/current_points", 1);
 
   // subscriber
   /* /vlp16_0/velodyne_points /kitti/velo/pointcloud  /lslidar_point_cloud */
-  sub_pc_ = nh_.subscribe<sensor_msgs::PointCloud2>("/lslidar_point_cloud", 5, boost::bind(&XCHUSLAM::pcCB, this, _1));
+  sub_pc_ =
+      nh_.subscribe<sensor_msgs::PointCloud2>("/lslidar_point_cloud", 5, boost::bind(&XCHUSLAM::pcCB, this, _1));
   sub_imu_ = nh_.subscribe<sensor_msgs::Imu>("/imu/data", 5, boost::bind(&XCHUSLAM::imuCB, this, _1));
   sub_odom_ = nh_.subscribe<nav_msgs::Odometry>("/odom/imu", 5, boost::bind(&XCHUSLAM::odomCB, this, _1));
 }
 
 bool XCHUSLAM::init() {
   pnh_.param<float>("scan_period", scan_period_, 0.2);
-  pnh_.param<float>("keyframe_dist", keyframe_dist_, 0.3);
+  pnh_.param<float>("keyframe_dist", keyframe_dist_, 0.3); // 用于设置关键帧之前的间距,太近就不加到位子图里面
   keyframe_dist_ *= keyframe_dist_;
   pnh_.param<float>("surround_search_radius", surround_search_radius_, 20.);
-  pnh_.param<int>("surround_search_num", surround_search_num_, 50);
-  pnh_.param<float>("voxel_leaf_size", voxel_leaf_size_, 0.5);
-  pnh_.param<float>("min_scan_range", min_scan_range_, 0.3);
+  pnh_.param<int>("surround_search_num", surround_search_num_, 50);  // localmap的帧数
+  pnh_.param<float>("voxel_leaf_size", voxel_leaf_size_, 0.5); // 用于下采样网格大小
+  pnh_.param<float>("min_scan_range", min_scan_range_, 0.3);   // 太近或者太远的点云需要截掉
   min_scan_range_ *= min_scan_range_;
   pnh_.param<float>("max_scan_range", max_scan_range_, 80);
   max_scan_range_ *= max_scan_range_;
   pnh_.param<bool>("use_odom", use_odom_, false);
   pnh_.param<bool>("use_imu", use_imu_, false);
-  //pnh_.param<bool>("loop_closure_enabled", loop_closure_enabled_, true);
-
   pnh_.param<double>("trans_eps", trans_eps_, 0.01);
   pnh_.param<double>("step_size", step_size, 0.1);
   pnh_.param<double>("ndt_res", ndt_res_, 2.);
   pnh_.param<int>("max_iters", max_iters_, 30);
-
-  pnh_.param<float>("history_search_radius", history_search_radius_, 10.);
-  pnh_.param<int>("history_search_num", history_search_num_, 20);
-  pnh_.param<float>("history_fitness_score", history_fitness_score_, 0.3);
+  pnh_.param<float>("history_search_radius", history_search_radius_, 10.);  // 回环检测的候选帧搜索半径
+  pnh_.param<int>("history_search_num", history_search_num_, 20);    // 选取多少历史帧
+  pnh_.param<float>("history_fitness_score", history_fitness_score_, 0.3);  // 回环检测icp匹配阈值
   pnh_.param<float>("ds_history_size", ds_history_size_, 1.);
+  pnh_.param<std::string>("save_dir", save_dir_, "");   // 全局地图的保存路径
+  pnh_.param<bool>("loop_closure_enabled", loop_closure_enabled_, true);
 
-  pnh_.param<std::string>("save_dir", save_dir_, "");
+  loop_closed_ = false;  // 一开始是没有闭环的
 
   // ndt params set
   // 注意：此处设置ndt参数之后才能赋值给registration,否则后面无法使用getFinalScore函数！
@@ -86,7 +87,8 @@ bool XCHUSLAM::init() {
   ndt_omp_ = ndt;
 
   // 初始化tf
-  tf_b2l_ = Eigen::Matrix4f::Identity();
+  tf_m2o_.setIdentity();  // baselink到odom的初始变换,需要提前标定
+  tf_b2l_ = Eigen::Matrix4f::Identity(); // baselink到lidar的初始变换,需要提前标定
   float roll, pitch, yaw;
   if (!nh_.getParam("tf_b2l_x", tf_b2l_(0, 3)) || !nh_.getParam("tf_b2l_y", tf_b2l_(1, 3)) ||
       !nh_.getParam("tf_b2l_z", tf_b2l_(2, 3)) || !nh_.getParam("tf_b2l_roll", roll) ||
@@ -98,9 +100,6 @@ bool XCHUSLAM::init() {
   Eigen::AngleAxisf ry(pitch, Eigen::Vector3f::UnitY());
   Eigen::AngleAxisf rz(yaw, Eigen::Vector3f::UnitZ());
   tf_b2l_.block(0, 0, 3, 3) = (rz * ry * rx).matrix();
-  tf_m2o_.setIdentity();
-
-  loop_closed_ = false;
 
   // gtsam参数初始化
   ISAM2Params params;
@@ -108,23 +107,25 @@ bool XCHUSLAM::init() {
   params.relinearizeSkip = 1;
   isam = new ISAM2(params);
   gtsam::Vector vector6(6);
-  vector6 << 1e-6, 1e-6, 1e-6, 1e-8, 1e-8, 1e-6;
+  vector6 << 1e-6, 1e-6, 1e-6, 1e-8, 1e-8, 1e-6; // xyz yaw是主要变化量设为一个初始数量级
   prior_noise_ = noiseModel::Diagonal::Variances(vector6);
   odom_noise_ = noiseModel::Diagonal::Variances(vector6);
 
+  // 点云指针的初始化
   pc_source_.reset(new pcl::PointCloud<PointT>());
   pc_target_.reset(new pcl::PointCloud<PointT>());
-  cloud_keyposes_3d_.reset(new pcl::PointCloud<PointT>());
-  cloud_keyposes_6d_.reset(new pcl::PointCloud<PointXYZIRPYT>());
+  cloud_keyposes_3d_.reset(new pcl::PointCloud<PointT>());  // 关键帧位置
+  cloud_keyposes_6d_.reset(new pcl::PointCloud<PointXYZIRPYT>());  // 关键帧位姿
   latest_keyframe_.reset(new pcl::PointCloud<PointT>());
-  near_history_keyframes_.reset(new pcl::PointCloud<PointT>());
-  kdtree_poses_.reset(new pcl::KdTreeFLANN<PointT>());
+  near_history_keyframes_.reset(new pcl::PointCloud<PointT>()); // 回环时根据距离筛选的候选帧
+  kdtree_poses_.reset(new pcl::KdTreeFLANN<PointT>());    // 在回环检测时用kdtree加速候选帧的搜索
 
   // 不同的下采样网格大小
   downSizeFilterSource.setLeafSize(voxel_leaf_size_, voxel_leaf_size_, voxel_leaf_size_);
-  downSizeFilterHistoryKeyFrames.setLeafSize(1.0, 1.0, 1.0);
-  downSizeFilterGlobalMapKeyFrames.setLeafSize(voxel_leaf_size_, voxel_leaf_size_, voxel_leaf_size_);
+  downSizeFilterHistoryKeyFrames.setLeafSize(voxel_leaf_size_, voxel_leaf_size_, voxel_leaf_size_);
+  downSizeFilterGlobalMap.setLeafSize(1.0, 1.0, 1.0);
 
+  // pose对应的T
   pre_pose_m_ = cur_pose_m_ = pre_pose_o_ = cur_pose_o_ = Eigen::Matrix4f::Identity();
 
   imu_ptr_front_ = odom_ptr_front_ = 0;
@@ -157,15 +158,14 @@ bool XCHUSLAM::init() {
   return true;
 }
 
-void XCHUSLAM::run() {}
-
 void XCHUSLAM::visualThread() {
+  // 可视化
   ros::Rate rate(0.2);
   while (ros::ok()) {
     rate.sleep();
     publishKeyposesAndFrames();
   }
-  // save final point cloud
+  // 关闭终端保存地图
   TransformAndSaveMap();
 }
 
@@ -191,8 +191,8 @@ void XCHUSLAM::TransformAndSaveMap() {
   map->height = 1;
   map->is_dense = false;
 
-  downSizeFilterGlobalMapKeyFrames.setInputCloud(map);
-  downSizeFilterGlobalMapKeyFrames.filter(*map);
+  downSizeFilterGlobalMap.setInputCloud(map);
+  downSizeFilterGlobalMap.filter(*map);
 
   pcl::PointCloud<PointT>::Ptr poses(new pcl::PointCloud<PointT>());
   pcl::copyPointCloud(*cloud_keyposes_3d_, *poses);
@@ -320,24 +320,29 @@ void XCHUSLAM::adjustDistortion(pcl::PointCloud<PointT>::Ptr &cloud, double scan
 }
 
 void XCHUSLAM::extractSurroundKeyframes() {
+
+  // cloud_keyframes_用来存储关键帧, localmap是选取较近的关键帧来进行不断更新的
   if (cloud_keyframes_.empty()) {
     return;
   }
 
   bool target_updated = false;
   if (recent_keyframes_.size() < surround_search_num_) {
+    // localmap的帧数较少,加入新的关键这帧
     recent_keyframes_.clear();
     for (int i = cloud_keyposes_3d_->points.size() - 1; i >= 0; --i) {
       int this_key_id = int(cloud_keyposes_3d_->points[i].intensity);
       pcl::PointCloud<PointT>::Ptr tf_cloud(new pcl::PointCloud<PointT>());
       tf_cloud = transformPointCloud(cloud_keyframes_[this_key_id], cloud_keyposes_6d_->points[this_key_id]);
       recent_keyframes_.push_back(tf_cloud);
+      // 这里可以缩减一下时间
       if (recent_keyframes_.size() >= surround_search_num_) {
         break;
       }
     }
     target_updated = true;
   } else {
+    // localmap的帧数够的话,去掉旧帧, 加入新帧
     static int latest_frame_id = cloud_keyframes_.size() - 1;
     if (latest_frame_id != cloud_keyframes_.size() - 1) {
       latest_frame_id = cloud_keyframes_.size() - 1;
@@ -350,29 +355,34 @@ void XCHUSLAM::extractSurroundKeyframes() {
     }
   }
 
-  // 将附近的点云帧作为localmap匹配的target
+  // 将localmap作为匹配的target
   if (target_updated) {
     pc_target_->clear();
     for (auto keyframe : recent_keyframes_) {
       *pc_target_ += *keyframe;
     }
     ndt_omp_->setInputTarget(pc_target_);
-    ROS_INFO("update localmap...");
+    //ROS_INFO("update localmap...");
   }
 }
 
 bool XCHUSLAM::saveKeyframesAndFactor() {
-  // 此处的当前位姿(cur_pose_ndt_)为 ndt 匹配后的 final_transformation
+  // 此处的当前位姿(cur_pose_ndt_)为ndt匹配后的final_transformation
   double roll, pitch, yaw;
   tf::Matrix3x3(tf::Quaternion(cur_pose_ndt_.pose.pose.orientation.x, cur_pose_ndt_.pose.pose.orientation.y,
                                cur_pose_ndt_.pose.pose.orientation.z, cur_pose_ndt_.pose.pose.orientation.w)).getRPY(
       roll, pitch, yaw);
+
   if (cloud_keyposes_3d_->points.empty()) {
     // gtSAMgraph_.add(PriorFactor<Pose3>(0, Pose3(Rot3::Quaternion(cur_pose_ndt_.pose.pose.orientation.w, cur_pose_ndt_.pose.pose.orientation.x, cur_pose_ndt_.pose.pose.orientation.y, cur_pose_ndt_.pose.pose.orientation.z), Point3(cur_pose_ndt_.pose.pose.position.x, cur_pose_ndt_.pose.pose.position.y, cur_pose_ndt_.pose.pose.position.z)), prior_noise_));
+    // 第一帧进来添加先验因子并初始化因子图
+    // 一元因子, 系统先验
     gtSAMgraph_.add(PriorFactor<Pose3>(0, Pose3(Rot3::RzRyRx(roll, pitch, yaw),
                                                 Point3(cur_pose_ndt_.pose.pose.position.x,
                                                        cur_pose_ndt_.pose.pose.position.y,
                                                        cur_pose_ndt_.pose.pose.position.z)), prior_noise_));
+
+    // 给变量0赋值(位姿)
     initial_estimate_.insert(0, Pose3(Rot3::Quaternion(cur_pose_ndt_.pose.pose.orientation.w,
                                                        cur_pose_ndt_.pose.pose.orientation.x,
                                                        cur_pose_ndt_.pose.pose.orientation.y,
@@ -386,10 +396,11 @@ bool XCHUSLAM::saveKeyframesAndFactor() {
         std::pow(cur_pose_ndt_.pose.pose.position.y - pre_pose.y, 2) +
         std::pow(cur_pose_ndt_.pose.pose.position.z - pre_pose.z, 2) <
         keyframe_dist_) {
-      // too close
+      // 关键帧之间驱离太近则不加入因子
       return false;
     }
 
+    // pitch视作不参与优化
     // gtsam::Pose3 pose_from = Pose3(Rot3::Quaternion(pre_keypose_.pose.pose.orientation.w, pre_keypose_.pose.pose.orientation.x, pre_keypose_.pose.pose.orientation.y, pre_keypose_.pose.pose.orientation.z), Point3(pre_keypose_.pose.pose.position.x, pre_keypose_.pose.pose.position.y, pre_keypose_.pose.pose.position.z));
     gtsam::Pose3 pose_from = Pose3(Rot3::RzRyRx(pre_pose.roll, pre_pose.pitch, pre_pose.yaw),
                                    Point3(pre_pose.x, pre_pose.y, pre_pose.z));
@@ -397,8 +408,10 @@ bool XCHUSLAM::saveKeyframesAndFactor() {
     gtsam::Pose3 pose_to = Pose3(Rot3::RzRyRx(roll, pitch * 0, yaw),
                                  Point3(cur_pose_ndt_.pose.pose.position.x, cur_pose_ndt_.pose.pose.position.y,
                                         cur_pose_ndt_.pose.pose.position.z * 0));
+    // 二元因子, 添加回环之间的关系
     gtSAMgraph_.add(BetweenFactor<Pose3>(cloud_keyposes_3d_->points.size() - 1, cloud_keyposes_3d_->points.size(),
                                          pose_from.between(pose_to), odom_noise_));
+    // 给当前变量赋值
     initial_estimate_.insert(cloud_keyposes_3d_->points.size(), Pose3(Rot3::RzRyRx(roll, pitch * 0, yaw),
                                                                       Point3(cur_pose_ndt_.pose.pose.position.x,
                                                                              cur_pose_ndt_.pose.pose.position.y,
@@ -406,21 +419,26 @@ bool XCHUSLAM::saveKeyframesAndFactor() {
                                                                                  0)));
   }
 
+  // 更新isam
   isam->update(gtSAMgraph_, initial_estimate_);
   isam->update();
 
+  // 清除graph和initial value, 否则会重复更新
   gtSAMgraph_.resize(0);
   initial_estimate_.clear();
 
   PointT this_pose_3d;
   PointXYZIRPYT this_pose_6d;
+
+  // 提取优化结果, 更新关键帧及其位姿
   Pose3 latest_estimate;
   isam_current_estimate_ = isam->calculateEstimate();
-  latest_estimate = isam_current_estimate_.at<Pose3>(isam_current_estimate_.size() - 1);
+  latest_estimate = isam_current_estimate_.at<Pose3>(isam_current_estimate_.size() - 1);// 最新的一个节点
 
   this_pose_6d.x = this_pose_3d.x = latest_estimate.translation().x();
   this_pose_6d.y = this_pose_3d.y = latest_estimate.translation().y();
   this_pose_6d.z = this_pose_3d.z = latest_estimate.translation().z();
+  // 注意其序号赋值给intensity字段
   this_pose_6d.intensity = this_pose_3d.intensity = cloud_keyposes_3d_->points.size();
   this_pose_6d.roll = latest_estimate.rotation().roll();
   this_pose_6d.pitch = latest_estimate.rotation().pitch();
@@ -428,13 +446,6 @@ bool XCHUSLAM::saveKeyframesAndFactor() {
   this_pose_6d.time = cur_pose_ndt_.header.stamp.toSec();
   cloud_keyposes_3d_->points.push_back(this_pose_3d);
   cloud_keyposes_6d_->points.push_back(this_pose_6d);
-
-  // std::cout << "pre_keypose: (" << pre_keypose_.pose.pose.position.x << ", " << pre_keypose_.pose.pose.position.y << ", " << pre_keypose_.pose.pose.position.z << "; " << std::endl;
-//  std::cout << "cur_pose_ndt: (" << cur_pose_ndt_.pose.pose.position.x << ", " << cur_pose_ndt_.pose.pose.position.y
-//            << ", " << cur_pose_ndt_.pose.pose.position.z << "; "
-//            << roll << ", " << pitch << ", " << yaw << ")" << std::endl;
-//  std::cout << "this_pose_6d: (" << this_pose_6d.x << ", " << this_pose_6d.y << ", " << this_pose_6d.z << "; "
-//            << this_pose_6d.roll << ", " << this_pose_6d.pitch << ", " << this_pose_6d.yaw << ")" << std::endl;
 
   if (cloud_keyposes_3d_->points.size() > 1) {
     pre_keypose_.pose.pose.position.x = this_pose_3d.x;
@@ -455,12 +466,12 @@ bool XCHUSLAM::saveKeyframesAndFactor() {
   cur_pose_m_(1, 3) = pre_keypose_.pose.pose.position.y;
   cur_pose_m_(2, 3) = pre_keypose_.pose.pose.position.z;
 
+  // 添加关键帧
   pcl::PointCloud<PointT>::Ptr cur_keyframe(new pcl::PointCloud<PointT>());
   pcl::copyPointCloud(*pc_source_, *cur_keyframe);
   for (auto &p : cur_keyframe->points) {
     p.intensity = this_pose_3d.intensity;
   }
-
   cloud_keyframes_.push_back(cur_keyframe);
 
   ROS_INFO("saveKeyframesAndFactor: %d points", cur_keyframe->points.size());
@@ -469,6 +480,7 @@ bool XCHUSLAM::saveKeyframesAndFactor() {
 }
 
 void XCHUSLAM::publishKeyposesAndFrames() {
+  // 发布优化后的关键帧位置点
   if (pub_keyposes_.getNumSubscribers() > 0) {
     sensor_msgs::PointCloud2 msg;
     pcl::toROSMsg(*cloud_keyposes_3d_, msg);
@@ -476,27 +488,26 @@ void XCHUSLAM::publishKeyposesAndFrames() {
     msg.header.stamp = ros::Time::now();
     pub_keyposes_.publish(msg);
   }
-  if (pub_laser_cloud_surround_.getNumSubscribers() > 0) {
-    int num_points = 0;
-    sensor_msgs::PointCloud2 msg;
+
+  // 发布全局地图,这里为了不卡,对地图进行下采样
+  if (pub_globalmap_.getNumSubscribers() > 0) {
     pcl::PointCloud<PointT>::Ptr map(new pcl::PointCloud<PointT>());
-    Eigen::Matrix4f T(Eigen::Matrix4f::Identity());
+    // 把栈里面所有的关键帧拿出来拼成地图
     for (int i = 0; i < cloud_keyframes_.size(); ++i) {
       pcl::PointCloud<PointT>::Ptr tmp(new pcl::PointCloud<PointT>());
       tmp = transformPointCloud(cloud_keyframes_[i], cloud_keyposes_6d_->points[i]);
       *map += *tmp;
-      num_points += tmp->points.size();
     }
 
     // downsample visualized points
-    downSizeFilterGlobalMapKeyFrames.setInputCloud(map);
-    downSizeFilterGlobalMapKeyFrames.filter(*map);
+    downSizeFilterGlobalMap.setInputCloud(map);
+    downSizeFilterGlobalMap.filter(*map);
 
+    sensor_msgs::PointCloud2 msg;
     pcl::toROSMsg(*map, msg);
     msg.header.frame_id = "map";
     msg.header.stamp = ros::Time::now();
-    pub_laser_cloud_surround_.publish(msg);
-    ROS_INFO("Map Size: %d points", num_points);
+    pub_globalmap_.publish(msg);
   }
 }
 
@@ -517,14 +528,17 @@ void XCHUSLAM::pcCB(const sensor_msgs::PointCloud2ConstPtr &msg) {
   //  提取附近的点云帧
   extractSurroundKeyframes();
 
-  // 去运动畸变
   pcl::PointCloud<PointT>::Ptr tmp_cloud(new pcl::PointCloud<PointT>());
   pcl::fromROSMsg(*msg, *tmp_cloud);
 
-  // 点云转换到 /base_link 坐标系中处理
+//  std::vector<int> indices;   //remove NAN
+//  pcl::removeNaNFromPointCloud(tmp_cloud, tmp_cloud, indices);
+
+  // 点云转换到/base_link坐标系中处理
   pc_source_->clear();
   pcl::transformPointCloud(*tmp_cloud, *pc_source_, tf_b2l_);
 
+  // 去运动畸变
   if (use_imu_) {
     adjustDistortion(pc_source_, msg->header.stamp.toSec());
   }
@@ -542,20 +556,23 @@ void XCHUSLAM::pcCB(const sensor_msgs::PointCloud2ConstPtr &msg) {
     }
   }
 
-  // 第一帧点云，存为 target，初始化起始位置
+  // 第一帧点云存为target, 初始化起始位置
   if (cloud_keyframes_.empty()) {
     ROS_INFO("first laser frame.");
     *pc_target_ += *pc_source_;
     ndt_omp_->setInputTarget(pc_target_);
 
+    // 使用odom做初值
     if (use_odom_ && odom_ptr_last_ != -1) {
       int odom_ptr = odom_ptr_front_;
       while (odom_ptr != odom_ptr_last_) {
+        // 在odom队列中寻找时间距离最近的帧
         if (odom_queue_[odom_ptr].header.stamp > msg->header.stamp) {
           break;
         }
         odom_ptr = (odom_ptr + 1) % imu_queue_len_;
       }
+      // 更新pre_pose_o_
       pre_pose_o_.block<3, 3>(0, 0) = Eigen::Quaternionf(odom_queue_[odom_ptr].pose.pose.orientation.w,
                                                          odom_queue_[odom_ptr].pose.pose.orientation.x,
                                                          odom_queue_[odom_ptr].pose.pose.orientation.y,
@@ -563,6 +580,8 @@ void XCHUSLAM::pcCB(const sensor_msgs::PointCloud2ConstPtr &msg) {
       pre_pose_o_(0, 3) = odom_queue_[odom_ptr].pose.pose.position.x;
       pre_pose_o_(1, 3) = odom_queue_[odom_ptr].pose.pose.position.y;
       pre_pose_o_(2, 3) = odom_queue_[odom_ptr].pose.pose.position.z;
+
+      // 更新cur_pos
       cur_pose_o_ = pre_pose_o_;
       odom_ptr_front_ = odom_ptr; // 更新指针
     }
@@ -571,6 +590,7 @@ void XCHUSLAM::pcCB(const sensor_msgs::PointCloud2ConstPtr &msg) {
   // 初始位姿估计
   if (use_odom_ && odom_ptr_last_ != -1) {
     pre_pose_o_ = cur_pose_o_;
+    // 寻找最近帧
     int odom_ptr = odom_ptr_front_;
     while (odom_ptr != odom_ptr_last_) {
       if (odom_queue_[odom_ptr].header.stamp > msg->header.stamp) {
@@ -578,6 +598,7 @@ void XCHUSLAM::pcCB(const sensor_msgs::PointCloud2ConstPtr &msg) {
       }
       odom_ptr = (odom_ptr + 1) % imu_queue_len_;
     }
+    // 直接赋值给cur_pose_o_
     cur_pose_o_.block<3, 3>(0, 0) = Eigen::Quaternionf(odom_queue_[odom_ptr].pose.pose.orientation.w,
                                                        odom_queue_[odom_ptr].pose.pose.orientation.x,
                                                        odom_queue_[odom_ptr].pose.pose.orientation.y,
@@ -596,18 +617,17 @@ void XCHUSLAM::pcCB(const sensor_msgs::PointCloud2ConstPtr &msg) {
     r_m2o.block<3, 3>(0, 0) = Eigen::Quaternionf(tf_m2o_.getRotation().w(), tf_m2o_.getRotation().x(),
                                                  tf_m2o_.getRotation().y(),
                                                  tf_m2o_.getRotation().z()).toRotationMatrix();
-    cur_pose_m_ = pre_pose_m_ * pre_pose_o_.inverse() * cur_pose_o_; // 见笔记“预测当前位姿”
+    cur_pose_m_ = pre_pose_m_ * pre_pose_o_.inverse() * cur_pose_o_; // 预测当前位姿
 
     tmp_q = Eigen::Quaternionf(cur_pose_m_.block<3, 3>(0, 0));
     tf::Matrix3x3(tf::Quaternion(tmp_q.x(), tmp_q.y(), tmp_q.z(), tmp_q.w())).getRPY(roll, pitch, yaw);
-    std::cout << "initial guess: "
-              << "(" << cur_pose_m_(0, 3) << ", " << cur_pose_m_(1, 3) << ", " << cur_pose_m_(2, 3) << ", " << roll
-              << ", " << pitch << ", " << yaw << ")" << std::endl;
   } else {
+    // 纯雷达模型
     predict_pose_ = pre_pose_ndt_;
     cur_pose_m_ = pre_pose_m_;
   }
 
+  // ndt匹配
   pcl::PointCloud<pcl::PointXYZI>::Ptr aligned_cloud_(new pcl::PointCloud<pcl::PointXYZI>);
   ndt_omp_->setInputSource(pc_source_);
   ndt_omp_->align(*aligned_cloud_, cur_pose_m_);
@@ -616,6 +636,7 @@ void XCHUSLAM::pcCB(const sensor_msgs::PointCloud2ConstPtr &msg) {
   has_converged_ = ndt_omp_->hasConverged();
   final_iters_ = ndt_omp_->getFinalNumIteration();
 
+  // 匹配的结果是一个相对位姿
   Eigen::Quaternionf tmp_q(final_transformation_.block<3, 3>(0, 0));
   double roll, pitch, yaw;
   tf::Matrix3x3(tf::Quaternion(tmp_q.x(), tmp_q.y(), tmp_q.z(), tmp_q.w())).getRPY(roll, pitch, yaw);
@@ -652,12 +673,14 @@ void XCHUSLAM::pcCB(const sensor_msgs::PointCloud2ConstPtr &msg) {
     pub_current_odom_.publish(odom);
   }
 
+  // 这样写tf的话, 在rviz中可视化的时候,界面是不会动的
   tf::Transform tf_m2b;
   tf_m2b.setOrigin(
       tf::Vector3(final_transformation_(0, 3), final_transformation_(1, 3), final_transformation_(2, 3)));
   tf_m2b.setRotation(tf::Quaternion(tmp_q.x(), tmp_q.y(), tmp_q.z(), tmp_q.w()));
 
   if (use_odom_ && odom_ptr_last_ != -1) {
+    // 如果使用odom的话需要考虑odom到base_link的变换
     tf_o2b_.setOrigin(tf::Vector3(odom_queue_[odom_ptr_front_].pose.pose.position.x,
                                   odom_queue_[odom_ptr_front_].pose.pose.position.y,
                                   odom_queue_[odom_ptr_front_].pose.pose.position.z));
@@ -689,6 +712,7 @@ void XCHUSLAM::pcCB(const sensor_msgs::PointCloud2ConstPtr &msg) {
       std::pow(final_transformation_(2, 3) - pre_pose_m_(2, 3), 2)) << std::endl;
   std::cout << "-----------------------------------------------------------------" << std::endl;
 
+  // 保存关键帧和因子
   if (saveKeyframesAndFactor()) {
     pcl::PointCloud<PointT>::Ptr pc_m(new pcl::PointCloud<PointT>());
     pcl::transformPointCloud(*pc_source_, *pc_m, cur_pose_m_);
@@ -702,22 +726,23 @@ void XCHUSLAM::pcCB(const sensor_msgs::PointCloud2ConstPtr &msg) {
       pointcloud_current_ptr->header.frame_id = "map";
       pub_current_points_.publish(*pointcloud_current_ptr);
     }
+    pc_m->clear();
 
     // localmap
     pcl::PointCloud<PointT>::Ptr local_cloud(new pcl::PointCloud<PointT>());
     pcl::copyPointCloud(*pc_target_, *local_cloud);
     downSizeFilterSource.setInputCloud(local_cloud);
     downSizeFilterSource.filter(*local_cloud);
-    if (pub_recent_keyframes_.getNumSubscribers() > 0) {
+    if (pub_localmap_.getNumSubscribers() > 0) {
       sensor_msgs::PointCloud2::Ptr localmap_msg_ptr(new sensor_msgs::PointCloud2);
       pcl::toROSMsg(*local_cloud, *localmap_msg_ptr);
       localmap_msg_ptr->header.frame_id = "map";
       localmap_msg_ptr->header.stamp = ros::Time::now();
-      pub_recent_keyframes_.publish(*localmap_msg_ptr);
+      pub_localmap_.publish(*localmap_msg_ptr);
     }
     local_cloud->clear();
   } else {
-    std::cout << "too close" << std::endl;
+    // std::cout << "too close" << std::endl;
   }
 
   pre_pose_m_ = cur_pose_m_;
@@ -849,15 +874,6 @@ void XCHUSLAM::performLoopClosure() {
     return;
   } else {
     ROS_WARN("loop closed");
-    /*if (pub_icp_keyframes_.getNumSubscribers() > 0) {
-      pcl::PointCloud<PointT>::Ptr closed_cloud(new pcl::PointCloud<PointT>());
-      pcl::transformPointCloud(*latest_keyframe_, *closed_cloud, correction_frame);
-      sensor_msgs::PointCloud2 msg;
-      pcl::toROSMsg(*closed_cloud, msg);
-      msg.header.stamp.fromSec(cloud_keyposes_6d_->points[latest_history_frame_id_].time);
-      msg.header.frame_id = "map";
-      pub_icp_keyframes_.publish(msg);
-    }*/
   }
 
   Eigen::Matrix4f t_wrong = initial_guess;
@@ -885,26 +901,18 @@ void XCHUSLAM::performLoopClosure() {
   isam->update();
   gtSAMgraph_.resize(0);
 
-  std::cout << "-----------------------------------------------------------------" << std::endl;
-  std::cout << "Time elapsed: " << elapsed.count() << std::endl;
+  double shift = std::sqrt(std::pow(correction_frame(0, 3) - initial_guess(0, 3), 2) +
+      std::pow(correction_frame(1, 3) - initial_guess(1, 3), 2) +
+      std::pow(correction_frame(2, 3) - initial_guess(2, 3), 2));
+  std::cout << "----------------------------loop clouser-------------------------------------" << std::endl;
   std::cout << "Number of source points: " << latest_keyframe_->size() << " points." << std::endl;
   std::cout << "target: " << near_history_keyframes_->points.size() << " points." << std::endl;
   std::cout << "ICP has converged: " << has_converged << std::endl;
   std::cout << "Fitness score: " << fitness_score << std::endl;
-  std::cout << "initial (x,y,z,roll,pitch,yaw):" << std::endl;
-  std::cout << "(" << initial_guess(0, 3) << ", " << initial_guess(1, 3) << ", " << initial_guess(2, 3) << ", "
-            << cloud_keyposes_6d_->points[latest_history_frame_id_].roll << ", "
-            << cloud_keyposes_6d_->points[latest_history_frame_id_].pitch << ", "
-            << cloud_keyposes_6d_->points[latest_history_frame_id_].yaw << ")" << std::endl;
-  std::cout << "final (x,y,z,roll,pitch,yaw):" << std::endl;
-  std::cout << "(" << t_correct(0, 3) << ", " << t_correct(1, 3) << ", " << t_correct(2, 3) << ", "
-            << roll << ", " << pitch << ", " << yaw << ")" << std::endl;
   std::cout << "Transformation Matrix:" << std::endl;
   std::cout << t_correct << std::endl;
-  std::cout << "shift: " << std::sqrt(std::pow(correction_frame(0, 3) - initial_guess(0, 3), 2) +
-      std::pow(correction_frame(1, 3) - initial_guess(1, 3), 2) +
-      std::pow(correction_frame(2, 3) - initial_guess(2, 3), 2)) << std::endl;
-  std::cout << "-----------------------------------------------------------------" << std::endl;
+  std::cout << "shift: " << shift << std::endl;
+  std::cout << "----------------------------loop clouser-------------------------------------" << std::endl;
 
   loop_closed_ = true;
 }
@@ -953,14 +961,6 @@ bool XCHUSLAM::detectLoopClosure() {
 
   downSizeFilterHistoryKeyFrames.setInputCloud(tmp_cloud);
   downSizeFilterHistoryKeyFrames.filter(*near_history_keyframes_);
-
-/*  if (pub_history_keyframes_.getNumSubscribers() > 0) {
-    sensor_msgs::PointCloud2 msg;
-    pcl::toROSMsg(*near_history_keyframes_, msg);
-    msg.header.stamp = cur_pose_ndt_.header.stamp;
-    msg.header.frame_id = "map";
-    pub_history_keyframes_.publish(msg);
-  }*/
 
   return true;
 }
