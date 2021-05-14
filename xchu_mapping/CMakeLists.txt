@@ -120,6 +120,9 @@ else()
 	target_link_libraries(pgo_node
         ${catkin_LIBRARIES}
         ${PCL_LIBRARIES}
+	${OMP_LIB} 
+	ndt_cpu 
+	ndt_omp
         gtsam
         )
 endif()
