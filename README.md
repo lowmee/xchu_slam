@@ -7,10 +7,10 @@
 - 里程计：基于NDT的里程计，利用imu、编码器来优化初始位姿估计，基于匀速运动模型，当同时使用编码器和imu时，选取imu的姿态和编码器的速度信息。初始化采用GNSS，不再是单位矩阵。
 
 - 局部地图：采用两种策略的localmap, 实测方法2效果更好
-1.基于关键帧数量选取, 关键帧数量够则滑窗更新, 去除旧的加入新的
+  1.基于关键帧数量选取, 关键帧数量够则滑窗更新, 去除旧的加入新的
   2.基于距离选取关键帧, 基于localmap距离阈值刷新, 每个周期内localmap关键帧数量从1开始增加
   
-- 后端优化：取协方差较小的GPS位置加入因子图中（目前存在点bug，已注释）。
+- 后端优化：取协方差较小的GPS位置加入因子图中（暂不可用）。
 
 - 回环检测：两种方法，2在laucnh文件中可选择开启
 
@@ -33,7 +33,7 @@
 1. Run the launch file:
 
 ```shell
-roslaunch xchu_slam  mapping.launch 
+roslaunch xchu_mapping  mapping.launch 
 ```
 
 2. Play existing bag files kitti, bag包播放时请0.1倍速，因为目前性能上还未优化，在bag包播放完成后，建图也将结束。

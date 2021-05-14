@@ -278,7 +278,6 @@ void PGO::Run() {
                                                           curr_node_idx,
                                                           poseFrom.between(poseTo),
                                                           odomNoise));
-
         // gps factor
         if (hasGPSforThisKF) {
           double curr_altitude_offseted = curr_gps_->altitude - gpsAltitudeInitOffset;
