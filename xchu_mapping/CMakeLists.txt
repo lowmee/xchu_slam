@@ -25,10 +25,10 @@ if(NOT MACOSX)
     endif ()
 else()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Ofast -ffast-math -Xclang -fopenmp -pthread")
-    if(EXISTS /usr/local/lib/libomp.a)
-        set(OMP_LIB /usr/local/lib/libomp.a)
-    elseif(EXISTS /usr/local/lib/libomp.dylib)
+    if(EXISTS /usr/local/lib/libomp.dylib)
         set(OMP_LIB /usr/local/lib/libomp.dylib)
+    elseif(EXISTS /usr/local/lib/libomp.a)
+        set(OMP_LIB /usr/local/lib/libomp.a)
     elseif(EXISTS /opt/local/lib/libomp.a)
         set(OMP_LIB /opt/local/lib/libomp.a)
         include_directories(/opt/local/include /opt/local/include/libomp)
@@ -59,8 +59,8 @@ find_package(catkin REQUIRED COMPONENTS
         std_msgs
         geometry_msgs
         message_generation
-#        ndt_cpu
-#        ndt_omp
+        ndt_cpu
+        ndt_omp
         )
 
 add_message_files(FILES
