@@ -134,7 +134,7 @@ class LidarOdom {
 //  ros::Duration scan_duration;
 
   // 定义Publisher
-  ros::Publisher current_odom_pub, keyposes_pub, current_points_pub, ndt_stat_pub;  // TODO:这是个啥发布????
+  ros::Publisher current_odom_pub, keyposes_pub, current_points_pub, local_map_pub;  // TODO:这是个啥发布????
   ros::Subscriber points_sub, imu_sub, odom_sub;
 
   pcl::PointCloud<PointTypePose>::Ptr cloud_keyposes_6d_;
@@ -254,8 +254,6 @@ class LidarOdom {
 
   void PublishCloud(const ros::Time &current_scan_time);
 
-  void ViewerThread();
-
   void ImuCB(const sensor_msgs::ImuConstPtr &msg);
 
   void OdomCB(const nav_msgs::OdometryConstPtr &msg);
@@ -267,8 +265,6 @@ class LidarOdom {
   void ImuCalc(ros::Time current_time);
 
   void OdomCalc(ros::Time current_time);
-
-  void SaveMap();
 
   void imuUpSideDown(const sensor_msgs::Imu::Ptr input);
 

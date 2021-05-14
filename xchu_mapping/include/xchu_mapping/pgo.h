@@ -16,6 +16,7 @@
 #include <fstream>
 #include <sstream>
 #include <iostream>
+//#include <stat.h>
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -97,7 +98,7 @@ class PGO {
 
   void Run();
 
-  void performSCLoopClosure();
+  void PerformSCLoopClosure();
 
   void LoopClosure();
 
@@ -197,7 +198,7 @@ class PGO {
 
   pcl::PointCloud<PointT>::Ptr TransformCloud2Map(pcl::PointCloud<PointT>::Ptr cloudIn, gtsam::Pose3 transformIn);
 
-  void loopFindNearKeyframesCloud(pcl::PointCloud<PointT>::Ptr &nearKeyframes,
+  void LoopFindNearKeyframesCloud(pcl::PointCloud<PointT>::Ptr &nearKeyframes,
                                   const int &key,
                                   const int &submap_size,
                                   const int &root_idx);

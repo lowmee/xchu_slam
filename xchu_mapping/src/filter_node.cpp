@@ -1,6 +1,7 @@
-//
-// Created by xchu on 2021/4/13.
-//
+/*
+ Created by xchu on 2021/4/13.
+*/
+
 
 #include "xchu_mapping/filter_node.h"
 
@@ -291,10 +292,5 @@ void CloudFilter::Run() {
       points_pub.publish(*pointcloud_current_ptr);
     }
   }
-
-  //sleep 2 ms every time
-//    std::chrono::milliseconds dura(2);
-//    std::this_thread::sleep_for(dura);
-//  }
 }
 

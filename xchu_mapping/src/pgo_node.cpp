@@ -8,8 +8,8 @@ int main(int argc, char **argv) {
   ROS_INFO("\033[1;32m---->\033[0m XCHU PGO Node Started.");
 
   PGO pgo;
-  std::thread loop_detection(&PGO::LoopClosure, &pgo);
-  std::thread icp_calculation(&PGO::ICPRefine, &pgo);
+  std::thread loop_detection(&PGO::LoopClosure, &pgo); // 会换检测
+  std::thread icp_calculation(&PGO::ICPRefine, &pgo); // ICP匹配
   std::thread visualize_map(&PGO::MapVisualization, &pgo);
 
   ros::Rate rate(20);
@@ -18,7 +18,6 @@ int main(int argc, char **argv) {
     ros::spinOnce();
     rate.sleep();
   }
-
   loop_detection.join();
   icp_calculation.join();
   visualize_map.join();
@@ -55,7 +54,7 @@ void PGO::InitParams() {
   float filter_size = 0.5;
   downSizeFilterScancontext.setLeafSize(filter_size, filter_size, filter_size);
   downSizeFilterICP.setLeafSize(filter_size, filter_size, filter_size);
-  downSizeFilterMapPGO.setLeafSize(1.0, 1.0, 1.0);
+  downSizeFilterMapPGO.setLeafSize(0.5, 0.5, 0.5);
 
   // gtsam params
   ISAM2Params parameters;
@@ -142,7 +141,7 @@ void PGO::ISAM2Update() {
   mutex_pose_.unlock();
 }
 
-void PGO::loopFindNearKeyframesCloud(pcl::PointCloud<PointT>::Ptr &nearKeyframes,
+void PGO::LoopFindNearKeyframesCloud(pcl::PointCloud<PointT>::Ptr &nearKeyframes,
                                      const int &key,
                                      const int &submap_size,
                                      const int &root_idx) {
@@ -305,7 +304,7 @@ void PGO::Run() {
   }
 }
 
-void PGO::performSCLoopClosure() {
+void PGO::PerformSCLoopClosure() {
   if (keyframePoses.size() < scManager.NUM_EXCLUDE_RECENT) // do not try too early
     return;
 
@@ -314,8 +313,6 @@ void PGO::performSCLoopClosure() {
   if (SCclosestHistoryFrameID != -1) {
     const int prev_node_idx = SCclosestHistoryFrameID;
     const int curr_node_idx = keyframePoses.size() - 1; // because cpp starts 0 and ends n-1
-    //cout << "Loop detected! - between " << prev_node_idx << " and " << curr_node_idx << "" << endl;
-
     ROS_WARN("Loop detected! - between %d and %d", prev_node_idx, curr_node_idx);
 
     mutex_.lock();
@@ -329,8 +326,9 @@ void PGO::LoopClosure() {
   ros::Rate rate(1.0);
   while (ros::ok()) {
     rate.sleep();
-    performSCLoopClosure();
+    PerformSCLoopClosure();
 
+    // 位姿图可视化
     if (markers_pub.getNumSubscribers() && keyframePosesUpdated.size() > 2) {
       visualization_msgs::MarkerArray markers = CreateMarker(ros::Time::now());
       markers_pub.publish(markers);
@@ -355,12 +353,12 @@ void PGO::ICPRefine() {
       const int _loop_kf_idx = loop_idx_pair.first;
       const int _curr_kf_idx = loop_idx_pair.second;
 
-      int historyKeyframeSearchNum =
-          25; // enough. ex. [-25, 25] covers submap length of 50x1 = 50m if every kf gap is 1m
+      // enough. ex. [-25, 25] covers submap length of 50x1 = 50m if every kf gap is 1m
+      int historyKeyframeSearchNum = 25;
       pcl::PointCloud<PointT>::Ptr cureKeyframeCloud(new pcl::PointCloud<PointT>());
       pcl::PointCloud<PointT>::Ptr targetKeyframeCloud(new pcl::PointCloud<PointT>());
-      loopFindNearKeyframesCloud(cureKeyframeCloud, _curr_kf_idx, 0, _loop_kf_idx); // use same root of loop kf idx
-      loopFindNearKeyframesCloud(targetKeyframeCloud, _loop_kf_idx, historyKeyframeSearchNum, _loop_kf_idx);
+      LoopFindNearKeyframesCloud(cureKeyframeCloud, _curr_kf_idx, 0, _loop_kf_idx); // use same root of loop kf idx
+      LoopFindNearKeyframesCloud(targetKeyframeCloud, _loop_kf_idx, historyKeyframeSearchNum, _loop_kf_idx);
 
       pcl::IterativeClosestPoint<PointT, PointT> icp;
       icp.setMaxCorrespondenceDistance(150); // giseop , use a value can cover 2*historyKeyframeSearchNum range in meter
@@ -382,6 +380,7 @@ void PGO::ICPRefine() {
         return;
       } else {
         ROS_INFO("LOOP DETECT SUCCESS %f", final_score);
+
       }
       // 闭环成功的存到这里
       loop_pairs_.push_back(std::pair<int, int>(_loop_kf_idx, _curr_kf_idx));
@@ -493,19 +492,26 @@ void PGO::SaveMap() {
   ss << int(ros::Time::now().toSec());
   std::string stamp = ss.str();
 
+  std::string file_path = save_dir_ + stamp + "/";
+  if (0 != access(file_path.c_str(), 2)) {
+    mkdir(file_path.c_str(), S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
+    ROS_INFO("mkdir filepath %s", file_path.c_str());
+  }
+
   int num_points = 0, num_points1 = 0;
   pcl::PointCloud<PointT>::Ptr map(new pcl::PointCloud<PointT>());
-  //pcl::PointCloud<PointT>::Ptr map_no_ground(new pcl::PointCloud<PointT>());
   for (int i = 0; i < keyframeLaserClouds.size(); ++i) {
-    *map += *TransformCloud2Map(keyframeLaserClouds[i], keyframePosesUpdated[i]);
+    *map += *
+        TransformCloud2Map(keyframeLaserClouds[i], keyframePosesUpdated[i]
+        );
   }
   map->width = map->points.size();
   map->height = 1;
   map->is_dense = false;
 
-//  map_no_ground->width = map_no_ground->points.size();
-//  map_no_ground->height = 1;
-//  map_no_ground->is_dense = false;
+  //  map_no_ground->width = map_no_ground->points.size();
+  //  map_no_ground->height = 1;
+  //  map_no_ground->is_dense = false;
   pcl::PointCloud<PointT>::Ptr poses(new pcl::PointCloud<PointT>());
   pcl::copyPointCloud(*keyposes_cloud_, *poses);
   poses->width = poses->points.size();
@@ -514,39 +520,40 @@ void PGO::SaveMap() {
   downSizeFilterMapPGO.setInputCloud(map);
   downSizeFilterMapPGO.filter(*map);
 
-  pcl::io::savePCDFile(save_dir_ + "trajectory_" + stamp + ".pcd", *poses);
-  pcl::io::savePCDFile(save_dir_ + "finalCloud_" + stamp + ".pcd", *map);
+  pcl::io::savePCDFile(file_path + "trajectory_.pcd", *poses);
+  pcl::io::savePCDFile(file_path + "finalCloud_.pcd", *map);
 
-  // 保存odom的csv
+// 保存odom的csv
   ROS_WARN("save odom csv files and g2o");
   std::ofstream outFile, outFile2;
-  outFile.open(save_dir_ + "odom_final_" + stamp + ".csv", std::ios::out);
-  outFile2.open(save_dir_ + "odom_" + stamp + ".csv", std::ios::out);
-  outFile << "stamp,x,y,z,roll,pitch,yaw";
-  outFile2 << "stamp,x,y,z,roll,pitch,yaw";
+  outFile.open(file_path + "odom_final.csv", std::ios::out);
+  outFile2.open(file_path + "odom.csv", std::ios::out);
+  outFile << "stamp,x,y,z,roll,pitch,yaw" << std::endl;
+  outFile2 << "stamp,x,y,z,roll,pitch,yaw" << std::endl;
   for (int j = 0; j < keyframePosesUpdated.size(); ++j) {
     outFile << keyframeTimes[j] << ","
             << keyframePosesUpdated[j].x << "," << keyframePosesUpdated[j].y << "," << keyframePosesUpdated[j].z << ","
             << keyframePosesUpdated[j].roll << "," << keyframePosesUpdated[j].pitch << ","
             << keyframePosesUpdated[j].yaw
-            << endl;
+            <<
+            endl;
 
     outFile2 << keyframeTimes[j] << ","
              << originPoses[j].x << "," << originPoses[j].y << "," << originPoses[j].z << ","
              << originPoses[j].roll << "," << originPoses[j].pitch << "," << originPoses[j].yaw
-             << endl;
+             <<
+             endl;
   }
   outFile.close();
   outFile2.close();
 
   // 同事保存g2o文件
-  gtsam::writeG2o(gtSAMgraph, isamCurrentEstimate, save_dir_ + "pose_graph_" + stamp + ".g2o");
+  gtsam::writeG2o(gtSAMgraph, isamCurrentEstimate, file_path + "pose_graph.g2o");
   ROS_WARN("Save map. pose size: %d, cloud size: %d", poses->points.size(), num_points);
 }
 
 void PGO::PublishPoseAndFrame() {
   // pub odom and path
-  // ROS_INFO("Publish map..");
   keyposes_cloud_->clear();
   nav_msgs::Odometry odomAftPGO;
 
@@ -629,10 +636,8 @@ void PGO::PublishPoseAndFrame() {
 visualization_msgs::MarkerArray PGO::CreateMarker(const ros::Time &stamp) {
   visualization_msgs::MarkerArray marker_array;
   visualization_msgs::Marker traj_marker, edge_marker, loop_marker;
-//  markers.markers.resize(3);
 
   // node markers
-//  visualization_msgs::Marker &traj_marker = markers.markers[0];
   traj_marker.header.frame_id = "map";
   traj_marker.header.stamp = stamp;
   traj_marker.ns = "nodes";
@@ -648,7 +653,6 @@ visualization_msgs::MarkerArray PGO::CreateMarker(const ros::Time &stamp) {
   traj_marker.color = color;
 
   // edge markers
-//  visualization_msgs::Marker &edge_marker = markers.markers[1];
   edge_marker.header.frame_id = "map";
   edge_marker.header.stamp = stamp;
   edge_marker.ns = "edges";
@@ -686,7 +690,7 @@ visualization_msgs::MarkerArray PGO::CreateMarker(const ros::Time &stamp) {
     loop_marker.header.frame_id = "map";
     loop_marker.header.stamp = stamp;
     loop_marker.ns = "loop";
-    loop_marker.id = 3;
+    loop_marker.id = 2;
     loop_marker.type = visualization_msgs::Marker::LINE_STRIP;
 
     loop_marker.pose.orientation.w = 1.0;
