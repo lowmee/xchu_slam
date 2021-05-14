@@ -1,17 +1,50 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(xchu_mapping)
 
+
+message("Compiler version is: ${CMAKE_SYSTEM_VERSION}")
+message("System version is: ${CMAKE_SYSTEM_NAME}")
+message("Architecture is: ${CMAKE_SYSTEM_PROCESSOR}")
+
+if("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
+    set(CMAKE_CXX_COMPILER clang++)
+    set(CMAKE_C_COMPILER clang)
+    set(MACOSX TRUE)
+endif()
+
 #add_compile_options(-std=c++17 -O0)
 set(CMAKE_BUILD_TYPE "Debug")
 set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
 
-find_package(OpenMP REQUIRED) #链接ndt_cpu库 get_max_thread_num
-if (OPENMP_FOUND)
-    message(STATUS "OPENMP FOUND")
-    set(OpenMP_FLAGS ${OpenMP_CXX_FLAGS})  # or if you use C: ${OpenMP_C_FLAGS}
-    set(OpenMP_LIBS gomp)
-endif ()
+if(NOT MACOSX)	
+	find_package(OpenMP REQUIRED) #链接ndt_cpu库 get_max_thread_num
+	if (OPENMP_FOUND)
+    		message(STATUS "OPENMP FOUND")
+    		set(OpenMP_FLAGS ${OpenMP_CXX_FLAGS})  # or if you use C: ${OpenMP_C_FLAGS}
+    		set(OpenMP_LIBS gomp)
+		set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
+	endif ()
+else()
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Ofast -ffast-math -Xclang -fopenmp -pthread")
+	if(EXISTS /usr/local/lib/libomp.a)
+        		set(OMP_LIB /usr/local/lib/libomp.a)
+    	elseif(EXISTS /usr/local/lib/libomp.dylib)
+        		set(OMP_LIB /usr/local/lib/libomp.dylib)
+    	elseif(EXISTS /opt/local/lib/libomp.a)
+        		set(OMP_LIB /opt/local/lib/libomp.a)
+        		include_directories(/opt/local/include /opt/local/include/libomp)
+    	elseif(EXISTS /opt/local/lib/libomp.dylib)
+        		set(OMP_LIB /opt/local/lib/libomp.dylib)
+        		include_directories(/opt/local/include /opt/local/include/libomp)
+    	elseif(EXISTS /usr/lib/libomp.a)
+        		set(OMP_LIB /usr/lib/libomp.a)
+    	elseif(EXISTS /usr/lib/libomp.dylib)
+        		set(OMP_LIB /usr/lib/libomp.dylib)
+    	else()
+        		message(FATAL_ERROR "Mac OS Detected but No OpenMP Library Found!")
+    	endif()
+endif()
+	
 
 find_package(OpenCV REQUIRED)
 find_package(GTSAM REQUIRED)
@@ -27,6 +60,8 @@ find_package(catkin REQUIRED COMPONENTS
         std_msgs
         geometry_msgs
         message_generation
+	ndt_cpu
+	ndt_omp
         )
 
 add_message_files(FILES
@@ -59,7 +94,7 @@ message("PCL Libraries include: ${PCL_LIBRARIES}")
 message("PCL version: ${PCL_VERSION}")
 
 add_executable(odom_node src/odom_node.cpp)
-target_link_libraries(odom_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenMP_LIBS} ndt_cpu ndt_omp)
+target_link_libraries(odom_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenMP_LIBS} ${OMP_LIB} ndt_cpu ndt_omp)
 
 add_executable(filter_node
         src/filter_node.cpp
@@ -70,13 +105,22 @@ add_executable(pgo_node
         src/pgo_node.cpp
         include/scancontext/Scancontext.cpp
         )
-target_compile_options(pgo_node
+if(NOT MACOSX)
+	target_compile_options(pgo_node
         PRIVATE ${OpenMP_CXX_FLAGS}
         )
-target_link_libraries(pgo_node
+	target_link_libraries(pgo_node
         ${catkin_LIBRARIES}
         ${PCL_LIBRARIES}
         ${OpenMP_CXX_FLAGS}
         ${OpenCV_LIBS}
         gtsam
         )
+else()
+	target_link_libraries(pgo_node
+        ${catkin_LIBRARIES}
+        ${PCL_LIBRARIES}
+        gtsam
+        )
+endif()
+
