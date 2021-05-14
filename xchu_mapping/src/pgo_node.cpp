@@ -236,7 +236,6 @@ void PGO::Run() {
       }
     }
 
-    //
     // Save data and Add consecutive node
     mKF.lock();
     keyframeLaserClouds.push_back(thisKeyFrame);
@@ -253,7 +252,6 @@ void PGO::Run() {
       /* prior node */
       const int init_node_idx = 0;
       gtsam::Pose3 poseOrigin = Pose6D2Pose3(keyframePoses.at(init_node_idx));
-      // auto poseOrigin = gtsam::Pose3(gtsam::Rot3::RzRyRx(0.0, 0.0, 0.0), gtsam::Point3(0.0, 0.0, 0.0));
       mutex_pg_.lock();
       {
         // prior factor
@@ -267,7 +265,6 @@ void PGO::Run() {
       cout << "posegraph prior node " << init_node_idx << " added" << endl;
     } else {
       /* consecutive node (and odom factor) after the prior added */
-      // == keyframePoses.size() > 1
       const int prev_node_idx = keyframePoses.size() - 2;
       const int curr_node_idx = keyframePoses.size() - 1;
       // becuase cpp starts with 0 (actually this index could be any number, but for simple implementation, we follow sequential indexing)
