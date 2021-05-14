@@ -294,6 +294,35 @@ void PGO::Run() {
       }
       mutex_pg_.unlock();
 
+      // publish odom
+      nav_msgs::Odometry odomAftPGOthis;
+      odomAftPGOthis.header.frame_id = "map";
+      odomAftPGOthis.child_frame_id = "velo_link";
+      odomAftPGOthis.header.stamp = ros::Time().fromSec(curr_odom_time_);
+      odomAftPGOthis.pose.pose.position.x = keyframePosesUpdated.front().x;
+      odomAftPGOthis.pose.pose.position.y = keyframePosesUpdated.front().y;
+      odomAftPGOthis.pose.pose.position.z = keyframePosesUpdated.front().z;
+      odomAftPGOthis.pose.pose.orientation =
+          tf::createQuaternionMsgFromRollPitchYaw(keyframePosesUpdated.front().roll,
+                                                  keyframePosesUpdated.front().pitch,
+                                                  keyframePosesUpdated.front().yaw);
+
+      // tf
+    /*  static tf::TransformBroadcaster br;
+      tf::Transform transform;
+      tf::Quaternion q;
+      transform.setOrigin(tf::Vector3(odomAftPGOthis.pose.pose.position.x,
+                                      odomAftPGOthis.pose.pose.position.y,
+                                      odomAftPGOthis.pose.pose.position.z));
+      q.setW(odomAftPGOthis.pose.pose.orientation.w);
+      q.setX(odomAftPGOthis.pose.pose.orientation.x);
+      q.setY(odomAftPGOthis.pose.pose.orientation.y);
+      q.setZ(odomAftPGOthis.pose.pose.orientation.z);
+      transform.setRotation(q);
+      br.sendTransform(tf::StampedTransform(transform, odomAftPGOthis.header.stamp, "map", "velo_link"));
+*/
+      final_odom_pub.publish(odomAftPGOthis); // last pose
+
       // 100真输出一次node数量
       if (curr_node_idx % 100 == 0)
         cout << "posegraph odom node " << curr_node_idx << " added." << endl;
@@ -417,6 +446,7 @@ void PGO::MapVisualization() {
   }
   // 关闭终端是保存地图
   ROS_WARN("SAVE MAP AND G2O..");
+  ISAM2Update(); // 最后一次更新全局地图
   SaveMap();
 }
 
@@ -517,8 +547,8 @@ void PGO::SaveMap() {
   downSizeFilterMapPGO.setInputCloud(map);
   downSizeFilterMapPGO.filter(*map);
 
-  pcl::io::savePCDFile(file_path + "trajectory_.pcd", *poses);
-  pcl::io::savePCDFile(file_path + "finalCloud_.pcd", *map);
+  pcl::io::savePCDFile(file_path + "trajectory.pcd", *poses);
+  pcl::io::savePCDFile(file_path + "finalCloud.pcd", *map);
 
 // 保存odom的csv
   ROS_WARN("save odom csv files and g2o");
@@ -552,7 +582,7 @@ void PGO::SaveMap() {
 void PGO::PublishPoseAndFrame() {
   // pub odom and path
   keyposes_cloud_->clear();
-  nav_msgs::Odometry odomAftPGO;
+  //nav_msgs::Odometry odomAftPGO;
 
   // publish map every 2 frame
   int SKIP_FRAMES = 2;
@@ -565,20 +595,20 @@ void PGO::PublishPoseAndFrame() {
   {
     const Pose6D &pose_est = keyframePosesUpdated.at(node_idx); // upodated poses
 
-    nav_msgs::Odometry odomAftPGOthis;
-    odomAftPGOthis.header.frame_id = "map";
-    odomAftPGOthis.child_frame_id = "base_link";
-    odomAftPGOthis.header.stamp = ros::Time().fromSec(keyframeTimes.at(node_idx));
-    odomAftPGOthis.pose.pose.position.x = pose_est.x;
-    odomAftPGOthis.pose.pose.position.y = pose_est.y;
-    odomAftPGOthis.pose.pose.position.z = pose_est.z;
-    odomAftPGOthis.pose.pose.orientation =
-        tf::createQuaternionMsgFromRollPitchYaw(pose_est.roll, pose_est.pitch, pose_est.yaw);
-    odomAftPGO = odomAftPGOthis;
+    /* nav_msgs::Odometry odomAftPGOthis;
+     odomAftPGOthis.header.frame_id = "map";
+     odomAftPGOthis.child_frame_id = "velo_link";
+     odomAftPGOthis.header.stamp = ros::Time().fromSec(keyframeTimes.at(node_idx));
+     odomAftPGOthis.pose.pose.position.x = pose_est.x;
+     odomAftPGOthis.pose.pose.position.y = pose_est.y;
+     odomAftPGOthis.pose.pose.position.z = pose_est.z;
+     odomAftPGOthis.pose.pose.orientation =
+         tf::createQuaternionMsgFromRollPitchYaw(pose_est.roll, pose_est.pitch, pose_est.yaw);
+     odomAftPGO = odomAftPGOthis;*/
 
-    geometry_msgs::PoseStamped poseStampAftPGO;
-    poseStampAftPGO.header = odomAftPGOthis.header;
-    poseStampAftPGO.pose = odomAftPGOthis.pose.pose;
+//    geometry_msgs::PoseStamped poseStampAftPGO;
+//    poseStampAftPGO.header = odomAftPGOthis.header;
+//    poseStampAftPGO.pose = odomAftPGOthis.pose.pose;
 
     PointT pt;
     pt.x = pose_est.x;
@@ -593,9 +623,9 @@ void PGO::PublishPoseAndFrame() {
   }
   mKF.unlock();
 
-  final_odom_pub.publish(odomAftPGO); // last pose
+//  final_odom_pub.publish(odomAftPGO); // last pose
 
-  // tf
+/*  // tf
   static tf::TransformBroadcaster br;
   tf::Transform transform;
   tf::Quaternion q;
@@ -607,7 +637,7 @@ void PGO::PublishPoseAndFrame() {
   q.setY(odomAftPGO.pose.pose.orientation.y);
   q.setZ(odomAftPGO.pose.pose.orientation.z);
   transform.setRotation(q);
-  br.sendTransform(tf::StampedTransform(transform, odomAftPGO.header.stamp, "map", "base_link"));
+  br.sendTransform(tf::StampedTransform(transform, odomAftPGO.header.stamp, "map", "velo_link"));*/
 
   // key poses
   sensor_msgs::PointCloud2 msg;

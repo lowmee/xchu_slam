@@ -5,17 +5,17 @@ message("Compiler version is: ${CMAKE_SYSTEM_VERSION}")
 message("System version is: ${CMAKE_SYSTEM_NAME}")
 message("Architecture is: ${CMAKE_SYSTEM_PROCESSOR}")
 
-if("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
+if ("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
     set(CMAKE_CXX_COMPILER clang++)
     set(CMAKE_C_COMPILER clang)
     set(MACOSX TRUE)
-endif()
+endif ()
 
 #add_compile_options(-std=c++17 -O0)
 set(CMAKE_BUILD_TYPE "Debug")
 set(CMAKE_CXX_STANDARD 17)
 
-if(NOT MACOSX)
+if (NOT MACOSX)
     find_package(OpenMP REQUIRED) #链接ndt_cpu库 get_max_thread_num
     if (OPENMP_FOUND)
         message(STATUS "OPENMP FOUND")
@@ -23,26 +23,26 @@ if(NOT MACOSX)
         set(OpenMP_LIBS gomp)
         set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g")
     endif ()
-else()
+else ()
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Ofast -ffast-math -Xclang -fopenmp -pthread")
-    if(EXISTS /usr/local/lib/libomp.dylib)
+    if (EXISTS /usr/local/lib/libomp.dylib)
         set(OMP_LIB /usr/local/lib/libomp.dylib)
-    elseif(EXISTS /usr/local/lib/libomp.a)
+    elseif (EXISTS /usr/local/lib/libomp.a)
         set(OMP_LIB /usr/local/lib/libomp.a)
-    elseif(EXISTS /opt/local/lib/libomp.a)
+    elseif (EXISTS /opt/local/lib/libomp.a)
         set(OMP_LIB /opt/local/lib/libomp.a)
         include_directories(/opt/local/include /opt/local/include/libomp)
-    elseif(EXISTS /opt/local/lib/libomp.dylib)
+    elseif (EXISTS /opt/local/lib/libomp.dylib)
         set(OMP_LIB /opt/local/lib/libomp.dylib)
         include_directories(/opt/local/include /opt/local/include/libomp)
-    elseif(EXISTS /usr/lib/libomp.a)
+    elseif (EXISTS /usr/lib/libomp.a)
         set(OMP_LIB /usr/lib/libomp.a)
-    elseif(EXISTS /usr/lib/libomp.dylib)
+    elseif (EXISTS /usr/lib/libomp.dylib)
         set(OMP_LIB /usr/lib/libomp.dylib)
-    else()
+    else ()
         message(FATAL_ERROR "Mac OS Detected but No OpenMP Library Found!")
-    endif()
-endif()
+    endif ()
+endif ()
 
 
 find_package(OpenCV REQUIRED)
@@ -59,8 +59,8 @@ find_package(catkin REQUIRED COMPONENTS
         std_msgs
         geometry_msgs
         message_generation
-        ndt_cpu
-        ndt_omp
+        #        ndt_cpu
+        #        ndt_omp
         )
 
 add_message_files(FILES
@@ -68,7 +68,7 @@ add_message_files(FILES
         LoopInfo.msg
         )
 
-link_directories(lib ${PCL_LIBRARY_DIRS}  ${GTSAM_LIBRARY_DIRS})
+link_directories(lib ${PCL_LIBRARY_DIRS} ${GTSAM_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
 add_definitions(-DEIGEN_DISABLE_UNALIGNED_ARRAY_ASSERT)
 
@@ -104,7 +104,7 @@ add_executable(pgo_node
         src/pgo_node.cpp
         include/scancontext/Scancontext.cpp
         )
-if(NOT MACOSX)
+if (NOT MACOSX)
     target_compile_options(pgo_node
             PRIVATE ${OpenMP_CXX_FLAGS}
             )
@@ -115,7 +115,7 @@ if(NOT MACOSX)
             ${OpenCV_LIBS}
             gtsam
             )
-else()
+else ()
     target_link_libraries(pgo_node
             ${catkin_LIBRARIES}
             ${PCL_LIBRARIES}
@@ -124,4 +124,4 @@ else()
             ndt_omp
             gtsam
             )
-endif()
+endif ()

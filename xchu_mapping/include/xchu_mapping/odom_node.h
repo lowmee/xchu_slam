@@ -196,7 +196,7 @@ class LidarOdom {
 
 //  std::string _imu_topic;  // 定义imu消息的topic
 //  std::string _odom_topic;
-  std::string map_saved_dir;
+//  std::string map_saved_dir;
 
   // mutex
   std::mutex mutex_lock;
@@ -254,7 +254,6 @@ class LidarOdom {
 
   void PublishCloud(const ros::Time &current_scan_time);
 
-  void ViewerThread();
 
   void ImuCB(const sensor_msgs::ImuConstPtr &msg);
 
@@ -268,7 +267,6 @@ class LidarOdom {
 
   void OdomCalc(ros::Time current_time);
 
-  void SaveMap();
 
   void imuUpSideDown(const sensor_msgs::Imu::Ptr input);
 

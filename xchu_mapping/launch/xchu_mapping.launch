@@ -2,7 +2,7 @@
     <param name="use_sim_time" value="true"/>
     <!--注意使用 仿真时间  bag播放时加-clock-->
 
-    <!--    <include file="$(find vehicle_description)/launch/lexus.launch"/>-->
+    <include file="$(find vehicle_description)/launch/lexus.launch"/>
     <node pkg="rviz" type="rviz" name="rviz" output="screen" args="-d $(find xchu_mapping)/rviz/mapping.rviz"/>
 
     <node pkg="xchu_mapping" type="filter_node" name="filter_node" output="screen"/>

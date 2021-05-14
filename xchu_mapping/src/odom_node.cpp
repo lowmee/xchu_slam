@@ -42,10 +42,9 @@ void LidarOdom::ParamInitial() {
   nh.param<float>("ndt_resolution", ndt_res, 2.0);
   nh.param<double>("ndt_step_size", step_size, 0.1);
   nh.param<double>("ndt_trans_eps", trans_eps, 0.01);
-  nh.param<int>("ndt_max_iter", max_iter, 50);
+  nh.param<int>("ndt_max_iter", max_iter, 30);
   nh.param<double>("min_add_scan_shift", min_add_scan_shift, 0.5);
-  nh.param<double>("max_submap_size", max_localmap_size, 15);
-  nh.param<std::string>("map_saved_dir", map_saved_dir, "");
+  nh.param<double>("max_submap_size", max_localmap_size, 10);
   nh.param<bool>("use_imu", _use_imu, true);
   nh.param<bool>("use_odom", _use_odom, false);
   nh.param<bool>("imu_upside_down", _imu_upside_down, false);
@@ -106,7 +105,6 @@ void LidarOdom::ParamInitial() {
   cloud_keyposes_6d_.reset(new pcl::PointCloud<PointTypePose>());
 
   scan_ptr.reset(new pcl::PointCloud<pcl::PointXYZI>());
-  // filtered_scan_ptr.reset(new pcl::PointCloud<pcl::PointXYZI>());
   transformed_scan_ptr.reset(new pcl::PointCloud<pcl::PointXYZI>());
 
   gnss_transform.setIdentity();  // 保存GPS信号的变量
@@ -202,8 +200,13 @@ void LidarOdom::OdomEstimate(const pcl::PointCloud<pcl::PointXYZI>::Ptr &filtere
   }
 
   ros::Time test_time_2 = ros::Time::now();
+
+
   pcl::PointCloud<pcl::PointXYZI>::Ptr
       localmap_ptr(new pcl::PointCloud<pcl::PointXYZI>(localmap));  // 用以保存降采样后的全局地图
+
+//  downSizeFilterLocalmap.setInputCloud(localmap_ptr);
+//  downSizeFilterLocalmap.filter(*localmap_ptr);
 
   if (_method_type == MethodType::use_pcl) {
     pcl_ndt.setInputSource(filtered_scan_ptr);
@@ -417,12 +420,6 @@ void LidarOdom::OdomEstimate(const pcl::PointCloud<pcl::PointXYZI>::Ptr &filtere
   std::cout << "scan shift: " << shift << std::endl;
   std::cout << "localmap shift: " << localmap_size << std::endl;
   std::cout << "global path: " << odom_size << std::endl;
-  //  std::cout << "1-2: " << (test_time_2 - test_time_1) << "ms" << "--downsample inputCloud" << std::endl;
-  //  std::cout << "2-3: " << (test_time_3 - test_time_2) << "ms" << "--set params and inputSource" << std::endl;
-  //  std::cout << "3-4: " << (test_time_4 - test_time_3) << "ms" << "--handle imu/odom and cal ndt resule"
-  //            << std::endl;
-  //  std::cout << "4-5: " << (test_time_5 - test_time_4) << "ms" << "--get current pose" << std::endl;
-  //  std::cout << "5-6: " << (test_time_6 - test_time_5) << "ms" << "--publish current pose" << std::endl;
   std::cout << "*************************************************************************" << std::endl;
 }
 
@@ -690,46 +687,6 @@ void LidarOdom::odom_info(const nav_msgs::Odometry &input) {
   OdomCalc(input.header.stamp);
 }
 
-void LidarOdom::SaveMap() {
-  // 关闭终端时保存地图
-  std::stringstream ss;
-  ss << int(ros::Time::now().toSec());
-  std::string stamp = ss.str();
-
-  std::string pcd_filename = map_saved_dir + "finalCLoud_" + stamp + ".pcd";
-  if (!globalmap.empty()) {
-    pcl::PointCloud<pcl::PointXYZI>::Ptr map_cloud(new pcl::PointCloud<pcl::PointXYZI>());
-    pcl::copyPointCloud(globalmap, *map_cloud);
-    pcl::VoxelGrid<pcl::PointXYZI> map_grid_filter;
-    map_grid_filter.setLeafSize(1.0, 1.0, 1.0);
-    map_grid_filter.setInputCloud(map_cloud);
-    map_grid_filter.filter(*map_cloud);
-
-    if (pcl::io::savePCDFileASCII(pcd_filename, *map_cloud) == -1) {
-      std::cout << "Failed saving " << pcd_filename << "." << std::endl;
-    }
-    std::cout << "Saved globalmap " << pcd_filename << " (" << map_cloud->size() << " points)" << std::endl;
-  }
-
-  // 优化后的位姿也保存一份
-  pcl::PointCloud<PointT>::Ptr poses(new pcl::PointCloud<PointT>());
-  pcl::copyPointCloud(*cloud_keyposes_3d_, *poses);
-  poses->width = poses->points.size();
-  poses->height = 1;
-  poses->is_dense = false;
-
-  pcl::io::savePCDFile(map_saved_dir + "trajectory_" + stamp + ".pcd", *poses);
-
-}
-
-void LidarOdom::ViewerThread() {
-  ros::Rate rate(5);
-  while (ros::ok()) {
-    rate.sleep();
-    // PublishCloud();
-  }
-}
-
 void LidarOdom::PublishCloud(const ros::Time &current_scan_time) {
   if (transformed_scan_ptr->empty() || localmap.empty() || cloud_keyposes_3d_->empty()) {
     return;
@@ -769,7 +726,7 @@ void LidarOdom::PublishCloud(const ros::Time &current_scan_time) {
 
   if (current_odom_pub.getNumSubscribers()) {
 
-    Eigen::Quaternionf tmp_q(t_localizer.block<3, 3>(0, 0));
+   Eigen::Quaternionf tmp_q(t_localizer.block<3, 3>(0, 0));
     double roll, pitch, yaw;
     tf::Matrix3x3(tf::Quaternion(tmp_q.x(), tmp_q.y(), tmp_q.z(), tmp_q.w())).getRPY(roll, pitch, yaw);
 
@@ -778,7 +735,7 @@ void LidarOdom::PublishCloud(const ros::Time &current_scan_time) {
     tf_m2b.setOrigin(
         tf::Vector3(t_localizer(0, 3), t_localizer(1, 3), t_localizer(2, 3)));
     tf_m2b.setRotation(tf::Quaternion(tmp_q.x(), tmp_q.y(), tmp_q.z(), tmp_q.w()));
-    tf_broadcaster_.sendTransform(tf::StampedTransform(tf_m2b, current_scan_time, "map", "base_link"));
+    tf_broadcaster_.sendTransform(tf::StampedTransform(tf_m2b, current_scan_time, "map", "velo_link"));
 
 /*    Eigen::Isometry3d odom_in = Eigen::Isometry3d::Identity();
     Eigen::Isometry3d odom_in2 = Eigen::Isometry3d::Identity();
@@ -807,7 +764,7 @@ void LidarOdom::PublishCloud(const ros::Time &current_scan_time) {
     odom.pose.pose.orientation.z = tmp_q.z();
     odom.pose.pose.orientation.w = tmp_q.w();
 
-    odom.child_frame_id = "base_link";
+    odom.child_frame_id = "velo_link";
     odom.twist.twist.linear.x = current_velocity_x;
     odom.twist.twist.linear.y = current_velocity_y;
     odom.twist.twist.angular.z = current_velocity_z;
