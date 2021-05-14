@@ -1,0 +1,22 @@
+<launch>
+    <param name="use_sim_time" value="true"/>
+    <!--注意使用 仿真时间  bag播放时加-clock-->
+
+    <!--    <include file="$(find vehicle_description)/launch/lexus.launch"/>-->
+    <node pkg="rviz" type="rviz" name="rviz" output="screen" args="-d $(find xchu_mapping)/rviz/mapping.rviz"/>
+
+    <node pkg="xchu_mapping" type="filter_node" name="filter_node" output="screen"/>
+
+    <node pkg="xchu_mapping" type="odom_node" name="odom_node" output="screen">
+        <!--<param name="method_type"  value="1"  type="int"/>  -->
+        <param name="use_imu" value="true" type="bool"/>
+        <param name="ndt_method_type" value="3" type="int"/> <!--pcl:0,cpu:1,gpu:2,omp:3,gpu_ptr:4-->
+        <param name="incremental_voxel_update" value="true" type="bool"/>
+    </node>
+
+
+    <node pkg="xchu_mapping" type="pgo_node" name="pgo_node" output="screen">
+        <param name="save_dir_" value="$(find xchu_mapping)/pcd/"/>
+    </node>
+
+</launch>
