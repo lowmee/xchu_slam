@@ -44,6 +44,10 @@
 #include <nav_msgs/Path.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <visualization_msgs/MarkerArray.h>
+#include <sensor_msgs/Image.h>
+#include <cv_bridge/cv_bridge.h>
+#include <image_transport/image_transport.h>
+
 #include <eigen3/Eigen/Dense>
 
 #include <gtsam/inference/Symbol.h>
@@ -61,32 +65,10 @@
 #include <gtsam/nonlinear/ISAM2.h>
 #include <gtsam/slam/dataset.h> //引入头文件
 
-//#include "scancontext/common.h"
 #include "scancontext/tic_toc.h"
 #include "scancontext/Scancontext.h"
-
-
-
-typedef pcl::PointXYZI PointT;
-
-inline double rad2deg(double radians)
-{
-  return radians * 180.0 / M_PI;
-}
-
-inline double deg2rad(double degrees)
-{
-  return degrees * M_PI / 180.0;
-}
-
-struct Pose6D {
-  double x;
-  double y;
-  double z;
-  double roll;
-  double pitch;
-  double yaw;
-};
+#include "xchu_mapping/common.h"
+#include "isc/ISCGeneration.h"
 
 using namespace gtsam;
 using std::cout;
@@ -114,14 +96,15 @@ class PGO {
   double movementAccumulation = 1000000.0; // large value means must add the first given frame.
   bool isNowKeyFrame = false;
 
+  int loop_method = 2; // 0:不适用sc, 1:使用sc, 2:使用isc
+
   std::queue<nav_msgs::Odometry::ConstPtr> odom_queue_;
   std::queue<sensor_msgs::PointCloud2ConstPtr> cloud_queue_;
   std::queue<sensor_msgs::NavSatFix::ConstPtr> gps_queue_;
   std::queue<std::pair<int, int> > loop_queue_;
+
   std::mutex mutex_;
   std::mutex mKF;
-
-  std::mutex mtxICP;
   std::mutex mutex_pg_;  // when pose graph add node
   std::mutex mutex_pose_;
 
@@ -130,7 +113,6 @@ class PGO {
   double curr_odom_time_ = 0;
   pcl::PointCloud<PointT>::Ptr curr_frame_;
   pcl::PointCloud<PointT>::Ptr laserCloudMapAfterPGO;
-  pcl::PointCloud<PointT>::Ptr keyposes_cloud_;
 
   std::vector<pcl::PointCloud<PointT>::Ptr> keyframeLaserClouds;
   std::vector<std::pair<int, int> > loop_pairs_;
@@ -138,6 +120,8 @@ class PGO {
   std::vector<Pose6D> keyframePoses;
   std::vector<Pose6D> keyframePosesUpdated;
   std::vector<double> keyframeTimes;
+  pcl::PointCloud<PointT>::Ptr keyposes_cloud_;
+  pcl::PointCloud<PointT>::Ptr keyframePoints;
 
   gtsam::NonlinearFactorGraph gtSAMgraph;
   bool gtSAMgraphMade = false;
@@ -153,15 +137,18 @@ class PGO {
   noiseModel::Base::shared_ptr robustLoopNoise;
   noiseModel::Base::shared_ptr robustGPSNoise;
 
-  pcl::VoxelGrid<PointT> downSizeFilterScancontext;
+  // sc loop detection
   SCManager scManager;
   double scDistThres;
 
-  pcl::VoxelGrid<PointT> downSizeFilterICP;
+  // isc loop detection
+  ISCGeneration iscGeneration;
 
-
+  pcl::KdTreeFLANN<PointT>::Ptr kdtreeHistoryKeyPoses;
   pcl::PointCloud<PointT>::Ptr laserCloudMapPGO;
-  pcl::VoxelGrid<PointT> downSizeFilterMapPGO;
+  pcl::VoxelGrid<PointT> downSizeFilterMapPGO, downSizeFilterICP, downSizePublishCloud;
+  pcl::VoxelGrid<PointT> downSizeFilterScancontext;
+
   bool laserCloudMapPGORedraw = true;
 
   bool useGPS = false;
@@ -172,8 +159,7 @@ class PGO {
   double recentOptimizedX = 0.0;
   double recentOptimizedY = 0.0;
 
-  ros::Publisher map_pub, odom_pub, final_odom_pub, pose_pub, markers_pub;
-//  ros::Publisher pubLoopScanLocal, pubLoopSubmapLocal;
+  ros::Publisher map_pub, odom_pub, final_odom_pub, pose_pub, markers_pub, isc_pub;
   ros::Subscriber points_sub, odom_sub, gps_sub;
 
   void OdomCB(const nav_msgs::Odometry::ConstPtr &_laserOdometry);
@@ -203,7 +189,7 @@ class PGO {
                                   const int &submap_size,
                                   const int &root_idx);
 
-  visualization_msgs::MarkerArray CreateMarker(const ros::Time& stamp);
+  visualization_msgs::MarkerArray CreateMarker(const ros::Time &stamp);
 
 };
 

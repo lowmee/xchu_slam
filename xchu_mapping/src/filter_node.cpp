@@ -20,7 +20,6 @@ int main(int argc, char **argv) {
 }
 
 CloudFilter::CloudFilter() : nh("~") {
-
   downSizeFilterKeyFrames.setLeafSize(0.5, 0.5, 0.5); // 发布全局地图的采样size,设置小了导致系统卡顿
   downSizeGroundFrames.setLeafSize(0.8, 0.8, 0.8);
   downSizeNoGroundFrames.setLeafSize(0.2, 0.2, 0.2);
@@ -126,7 +125,7 @@ Eigen::Vector4f CloudFilter::DetectPlane(const pcl::PointCloud<PointT>::Ptr &clo
 
     sensor_msgs::PointCloud2::Ptr temp_cloud_ptr(new sensor_msgs::PointCloud2);
     pcl::toROSMsg(*output_cloud, *temp_cloud_ptr);
-    temp_cloud_ptr->header.frame_id = "/velo_link";
+    temp_cloud_ptr->header.frame_id = "/camera_init";
     temp_cloud_ptr->header.stamp = current_header.stamp;
     normal_ground_pub.publish(temp_cloud_ptr);
   }
@@ -178,7 +177,7 @@ Eigen::Vector4f CloudFilter::DetectPlane(const pcl::PointCloud<PointT>::Ptr &clo
     sensor_msgs::PointCloud2::Ptr temp_cloud_ptr(new sensor_msgs::PointCloud2);
     pcl::toROSMsg(*output_cloud, *temp_cloud_ptr);
     temp_cloud_ptr->header.stamp = current_header.stamp;
-    temp_cloud_ptr->header.frame_id = "/velo_link";
+    temp_cloud_ptr->header.frame_id = "/camera_init";
     temp_cloud_ptr->header.stamp = current_header.stamp;
     final_ground_pub.publish(temp_cloud_ptr);
   }
@@ -199,7 +198,7 @@ Eigen::Vector4f CloudFilter::DetectPlane(const pcl::PointCloud<PointT>::Ptr &clo
     sensor_msgs::PointCloud2::Ptr temp_cloud_ptr(new sensor_msgs::PointCloud2);
     pcl::toROSMsg(*output_cloud, *temp_cloud_ptr);
     temp_cloud_ptr->header.stamp = current_header.stamp;
-    temp_cloud_ptr->header.frame_id = "/velo_link";
+    temp_cloud_ptr->header.frame_id = "/camera_init";
     non_points_pub.publish(temp_cloud_ptr);
   }
 
@@ -273,7 +272,7 @@ void CloudFilter::Run() {
     xchu_mapping::FloorCoeffs coeffs;
     // coeffs.header = cloud_header;
     coeffs.header.stamp = pointcloud_time;
-    coeffs.header.frame_id = "/velo_link";
+    coeffs.header.frame_id = "/camera_init";
     if (floor != Eigen::Vector4f::Identity()) {
       coeffs.coeffs.resize(4);
       for (int i = 0; i < 4; i++) {
@@ -288,7 +287,7 @@ void CloudFilter::Run() {
       sensor_msgs::PointCloud2::Ptr pointcloud_current_ptr(new sensor_msgs::PointCloud2);
       pcl::toROSMsg(*sor_scan_ptr, *pointcloud_current_ptr);
       pointcloud_current_ptr->header.stamp = pointcloud_time;
-      pointcloud_current_ptr->header.frame_id = "/velo_link";
+      pointcloud_current_ptr->header.frame_id = "/camera_init";
       points_pub.publish(*pointcloud_current_ptr);
     }
   }

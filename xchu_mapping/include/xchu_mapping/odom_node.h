@@ -30,55 +30,12 @@
 #include <pcl/point_types.h>
 #include <pcl/point_cloud.h>
 #include <pcl_conversions/pcl_conversions.h>
-
 #include <pcl/registration/ndt.h>
+
 #include <ndt_cpu/NormalDistributionsTransform.h>
 #include <pclomp/ndt_omp.h>
 #include "omp.h"
-
-using PointT = pcl::PointXYZI;
-
-struct pose {
-  double x, y, z, roll, pitch, yaw;
-
-  pose() {
-    x = y = z = roll = pitch = yaw = 0.0;
-  }
-
-  pose(double _x,
-       double _y,
-       double _z,
-       double _roll,
-       double _pitch,
-       double _yaw
-  ) : x(_x), y(_y), z(_z) {}
-
-  void init() {
-    x = y = z = roll = pitch = yaw = 0.0;
-  }
-
-  Eigen::Matrix4d rotateRPY() {
-    Eigen::Translation3d tf_trans(x, y, z);
-    Eigen::AngleAxisd rot_x(roll, Eigen::Vector3d::UnitX());
-    Eigen::AngleAxisd rot_y(pitch, Eigen::Vector3d::UnitY());
-    Eigen::AngleAxisd rot_z(yaw, Eigen::Vector3d::UnitZ());
-    Eigen::Matrix4d mat = (tf_trans * rot_z * rot_y * rot_x).matrix();
-    return mat;
-  }
-};
-
-pose operator+(const pose &A, const pose B) //给结构体定义加法；
-{
-  return pose(A.x + B.x, A.y + B.y, A.z + B.z, A.roll + B.roll, A.pitch + B.pitch, A.yaw + B.yaw);
-}
-pose operator-(const pose &A, const pose B) {
-  return pose(A.x - B.x, A.y - B.y, A.z - B.z, A.roll - B.roll, A.pitch - B.pitch, A.yaw - B.yaw);
-}
-std::ostream &operator<<(std::ostream &out, const pose &p)  //定义结构体流输出
-{
-  out << "(" << p.x << "," << p.y << "," << p.z << "," << p.roll << "," << p.pitch << "," << p.yaw << ")";
-  return out;
-}
+#include "xchu_mapping/common.h"
 
 enum class MethodType {
   use_pcl = 0,
@@ -87,57 +44,27 @@ enum class MethodType {
   use_omp = 3,
 };
 
-struct PointXYZIRPYT {
-  PCL_ADD_POINT4D
-  PCL_ADD_INTENSITY;
-  float roll;
-  float pitch;
-  float yaw;
-  double time;
-  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-} EIGEN_ALIGN16;
-
-POINT_CLOUD_REGISTER_POINT_STRUCT (PointXYZIRPYT,
-                                   (float, x, x)(float, y, y)
-                                       (float, z, z)(float, intensity, intensity)
-                                       (float, roll, roll)(float, pitch, pitch)(float, yaw, yaw)
-                                       (double, time, time)
-)
-typedef PointXYZIRPYT PointTypePose;
-
 class LidarOdom {
  private:
-  pose previous_pose, guess_pose, guess_pose_imu, guess_pose_odom, guess_pose_imu_odom;
-  pose current_pose, current_pose_imu, current_pose_odom, current_pose_imu_odom;
-  pose ndt_pose, localizer_pose;
-  pose added_pose;     // 初始设为0即可,因为第一帧如论如何也要加入地图的
-
-  Eigen::Matrix4f pre_pose_, guess_pose_, guess_pose_imu_, guess_pose_odom_, guess_pose_imu_odom_;
-  Eigen::Matrix4f current_pose_, current_pose_imu_, current_pose_odom_, current_pose_imu_odom_;
-  Eigen::Matrix4f ndt_pose_, localizer_pose_, added_pose_;
-
+  Pose6D previous_pose, guess_pose, guess_pose_imu, guess_pose_odom, guess_pose_imu_odom;
+  Pose6D current_pose, current_pose_imu, current_pose_odom, current_pose_imu_odom;
+  Pose6D previous_pose_imu, previous_pose_odom, previous_pose_imu_odom; // imu的变化量
+  Pose6D diff_pose_imu, diff_pose_odom, diff_pose_imu_odom; // 单个传感器的变化量
+  Pose6D ndt_pose, localizer_pose;
   // 定义各种差异值(两次采集数据之间的差异,包括点云位置差异,imu差异,odom差异,imu-odom差异)
-  pose diff_pose, offset_imu_pose, offset_odom_pose, offset_imu_odom_pose;
-  double diff;
-//  double diff_x, diff_y, diff_z, diff_yaw;  // current_pose - previous_pose // 定义两帧点云差异值 --以确定是否更新点云等
-//  double offset_imu_x, offset_imu_y, offset_imu_z, offset_imu_roll, offset_imu_pitch, offset_imu_yaw;
-//  double offset_odom_x, offset_odom_y, offset_odom_z, offset_odom_roll, offset_odom_pitch, offset_odom_yaw;
-//  double offset_imu_odom_x, offset_imu_odom_y, offset_imu_odom_z, offset_imu_odom_roll, offset_imu_odom_pitch,
-//      offset_imu_odom_yaw;
+  Pose6D diff_pose, offset_imu_pose, offset_odom_pose, offset_imu_odom_pose;
 
   // 定义速度值 --包括实际速度值,和imu取到的速度值
   double current_velocity_x, current_velocity_y, current_velocity_z;
   double current_velocity_imu_x, current_velocity_imu_y, current_velocity_imu_z;
 
   //  ros::Time current_scan_time;
-  ros::Time previous_scan_time;
-//  ros::Duration scan_duration;
+  ros::Time previous_scan_time, previous_imu_time;
+  ros::Time curr_imu_time;
 
   // 定义Publisher
-  ros::Publisher current_odom_pub, keyposes_pub, current_points_pub, ndt_stat_pub;  // TODO:这是个啥发布????
+  ros::Publisher current_odom_pub, odom_pose_pub, current_points_pub, ndt_stat_pub;  // TODO:这是个啥发布????
   ros::Subscriber points_sub, imu_sub, odom_sub;
-
-  pcl::PointCloud<PointTypePose>::Ptr cloud_keyposes_6d_;
 
   geometry_msgs::PoseStamped current_pose_msg, guess_pose_msg;
   std_msgs::Bool ndt_stat_msg;  // 确认是否是ndt的第一帧图像 bool类型
@@ -153,7 +80,6 @@ class LidarOdom {
   double fitness_score;
   bool has_converged;
   int final_num_iteration;
-  double transformation_probability;
 
   // Default values  // 公共ndt参数设置
   int max_iter;        // Maximum iterations
@@ -166,7 +92,7 @@ class LidarOdom {
   std::ofstream ofs; // 写csv文件
   std::string filename;
 
-  pcl::PointCloud<pcl::PointXYZI> localmap, globalmap, submap;
+  pcl::PointCloud<pcl::PointXYZI> localmap, globalmap, tmp_map;
 
 #ifdef CUDA_FOUND
   gpu::GNormalDistributionsTransform gpu_ndt;
@@ -194,29 +120,19 @@ class LidarOdom {
   bool _imu_upside_down = false;  // 用以解决坐标系方向(正负变换)问题 (比如x变更为-x等)
   int method_type_temp = 0;
 
-//  std::string _imu_topic;  // 定义imu消息的topic
-//  std::string _odom_topic;
-//  std::string map_saved_dir;
-
   // mutex
   std::mutex mutex_lock;
   std::queue<sensor_msgs::PointCloud2ConstPtr> cloud_queue_;
   std::queue<sensor_msgs::ImuConstPtr> imu_queue_;
   std::queue<nav_msgs::OdometryConstPtr> odom_queue_;
 
-  // imu input buffer
-  std::mutex imu_data_mutex;
-  std::vector<sensor_msgs::ImuConstPtr> imu_data;
-
   pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterGlobalMap; // for global map visualization
   pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterKeyFrames; // for global map visualization
   pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterLocalmap; // for global map visualization
-  pcl::VoxelGrid<PointT> downSizeFilterSource;
 
   pcl::PointCloud<PointT>::Ptr cloud_keyposes_3d_;
 
   pcl::PointCloud<pcl::PointXYZI>::Ptr scan_ptr;
-  //pcl::PointCloud<pcl::PointXYZI>::Ptr filtered_scan_ptr;
   pcl::PointCloud<pcl::PointXYZI>::Ptr transformed_scan_ptr;
 
   Eigen::Matrix4f t_localizer;
@@ -252,9 +168,6 @@ class LidarOdom {
 
   void ParamInitial();
 
-  void PublishCloud(const ros::Time &current_scan_time);
-
-
   void ImuCB(const sensor_msgs::ImuConstPtr &msg);
 
   void OdomCB(const nav_msgs::OdometryConstPtr &msg);
@@ -265,8 +178,9 @@ class LidarOdom {
 
   void ImuCalc(ros::Time current_time);
 
-  void OdomCalc(ros::Time current_time);
+  void ImuCalc2(ros::Time current_time);
 
+  void OdomCalc(ros::Time current_time);
 
   void imuUpSideDown(const sensor_msgs::Imu::Ptr input);
 

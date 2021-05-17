@@ -5,6 +5,7 @@ message("Compiler version is: ${CMAKE_SYSTEM_VERSION}")
 message("System version is: ${CMAKE_SYSTEM_NAME}")
 message("Architecture is: ${CMAKE_SYSTEM_PROCESSOR}")
 
+
 if ("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
     set(CMAKE_CXX_COMPILER clang++)
     set(CMAKE_C_COMPILER clang)
@@ -14,6 +15,7 @@ endif ()
 #add_compile_options(-std=c++17 -O0)
 set(CMAKE_BUILD_TYPE "Debug")
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_LIST_DIR}/cmake")
 
 if (NOT MACOSX)
     find_package(OpenMP REQUIRED) #链接ndt_cpu库 get_max_thread_num
@@ -59,9 +61,15 @@ find_package(catkin REQUIRED COMPONENTS
         std_msgs
         geometry_msgs
         message_generation
+        cv_bridge
+        image_transport
         #        ndt_cpu
         #        ndt_omp
         )
+
+find_package(G2O REQUIRED)
+include_directories(SYSTEM ${G2O_INCLUDE_DIR} ${G2O_INCLUDE_DIRS})
+link_directories(${G2O_LIBRARY_DIRS})
 
 add_message_files(FILES
         FloorCoeffs.msg
@@ -103,6 +111,7 @@ target_link_libraries(filter_node ${catkin_LIBRARIES} ${PCL_LIBRARIES})
 add_executable(pgo_node
         src/pgo_node.cpp
         include/scancontext/Scancontext.cpp
+        include/isc/ISCGeneration.cpp
         )
 if (NOT MACOSX)
     target_compile_options(pgo_node
@@ -125,3 +134,26 @@ else ()
             gtsam
             )
 endif ()
+
+# g2o
+add_executable(pgo_g2o_node
+        src/pgo_g2o_node.cpp
+#        src/g2o/graph_slam.cpp
+#        src/g2o/robust_kernel_io.cpp
+        include/scancontext/Scancontext.cpp
+        )
+target_link_libraries(pgo_g2o_node
+        ${catkin_LIBRARIES}
+        ${PCL_LIBRARIES}
+        ${G2O_TYPES_DATA}
+        ${G2O_CORE_LIBRARY}
+#        ${G2O_STUFF_LIBRARY}
+#        ${G2O_SOLVER_PCG}
+#        ${G2O_SOLVER_CSPARSE}
+#        ${G2O_SOLVER_CHOLMOD}
+#        ${G2O_TYPES_SLAM3D}
+#        ${G2O_TYPES_SLAM3D_ADDONS}
+        ${OpenCV_LIBS}
+        #        ${CERES_LIBRARIES}
+#        ${OpenCV_LIBRARIES}
+        )

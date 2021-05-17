@@ -8,8 +8,8 @@ int main(int argc, char **argv) {
   ROS_INFO("\033[1;32m---->\033[0m XCHU PGO Node Started.");
 
   PGO pgo;
-  std::thread loop_detection(&PGO::LoopClosure, &pgo); // 会换检测
-  std::thread icp_calculation(&PGO::ICPRefine, &pgo); // ICP匹配
+  std::thread loop_detection(&PGO::LoopClosure, &pgo); // 会换检测 2hz
+  std::thread icp_calculation(&PGO::ICPRefine, &pgo); // 会还检测优化 1hz
   std::thread visualize_map(&PGO::MapVisualization, &pgo);
 
   ros::Rate rate(20);
@@ -29,31 +29,45 @@ int main(int argc, char **argv) {
 PGO::PGO() : nh("~") {
   InitParams();
 
-  points_sub = nh.subscribe<sensor_msgs::PointCloud2>("/filtered_points", 100, &PGO::PcCB, this);
-  odom_sub = nh.subscribe<nav_msgs::Odometry>("/lidar_odom", 100, &PGO::OdomCB, this);
+  points_sub = nh.subscribe<sensor_msgs::PointCloud2>("/no_ground_points", 100, &PGO::PcCB, this);
+  odom_sub = nh.subscribe<nav_msgs::Odometry>("/laser_odom_to_init", 100, &PGO::OdomCB, this);
   gps_sub = nh.subscribe<sensor_msgs::NavSatFix>("/kitti/oxts/gps/fix", 100, &PGO::GpsCB, this);
 
+  // odom_pose_pub = nh.advertise<sensor_msgs::PointCloud2>("/odom_poses", 10);
   final_odom_pub = nh.advertise<nav_msgs::Odometry>("/final_odom", 100);
   map_pub = nh.advertise<sensor_msgs::PointCloud2>("/global_map", 100);
   pose_pub = nh.advertise<sensor_msgs::PointCloud2>("/key_poses", 1);  // key pose
   markers_pub = nh.advertise<visualization_msgs::MarkerArray>("/markers", 16);
+  isc_pub = nh.advertise<sensor_msgs::Image>("/isc", 100);
 }
 
 void PGO::InitParams() {
   nh.param<std::string>("save_dir_", save_dir_, "/home/xchu/workspace/xchujwu_slam/src/xchu_mapping/pcd/");
+  nh.param<int>("loop_method", loop_method, 2);
 
   keyframeMeterGap = 2.0;// pose assignment every k frames
-  scDistThres = 0.2;// pose assignment every k frames
+  if (loop_method == 1) {
+    scDistThres = 0.2;// pose assignment every k frames
+    scManager.setSCdistThres(scDistThres);
+  } else if (loop_method == 2) {
+    //read parameter
+    int sector_width = 60;
+    int ring_height = 60;
+    double max_dis = 40.0;
+    iscGeneration.init_param(ring_height, sector_width, max_dis);
+  }
 
   curr_frame_.reset(new pcl::PointCloud<PointT>());
   laserCloudMapAfterPGO.reset(new pcl::PointCloud<PointT>());
   laserCloudMapPGO.reset(new pcl::PointCloud<PointT>());
   keyposes_cloud_.reset(new pcl::PointCloud<PointT>());
+  keyframePoints.reset(new pcl::PointCloud<PointT>());
+  kdtreeHistoryKeyPoses.reset(new pcl::KdTreeFLANN<PointT>());
 
-  scManager.setSCdistThres(scDistThres);
   float filter_size = 0.5;
   downSizeFilterScancontext.setLeafSize(filter_size, filter_size, filter_size);
   downSizeFilterICP.setLeafSize(filter_size, filter_size, filter_size);
+  downSizePublishCloud.setLeafSize(1.0, 1.0, 1.0);
   downSizeFilterMapPGO.setLeafSize(0.5, 0.5, 0.5);
 
   // gtsam params
@@ -124,10 +138,12 @@ void PGO::ISAM2Update() {
 
   mKF.lock();
   for (int node_idx = 0; node_idx < int(isamCurrentEstimate.size()); node_idx++) {
+    pcl::PointXYZI &p2 = keyposes_cloud_->points[node_idx];
+    pcl::PointXYZI &p3 = keyframePoints->points[node_idx];
     Pose6D &p = keyframePosesUpdated[node_idx];
-    p.x = isamCurrentEstimate.at<gtsam::Pose3>(node_idx).translation().x();
-    p.y = isamCurrentEstimate.at<gtsam::Pose3>(node_idx).translation().y();
-    p.z = isamCurrentEstimate.at<gtsam::Pose3>(node_idx).translation().z();
+    p3.x = p2.x = p.x = isamCurrentEstimate.at<gtsam::Pose3>(node_idx).translation().x();
+    p3.y = p2.y = p.y = isamCurrentEstimate.at<gtsam::Pose3>(node_idx).translation().y();
+    p3.z = p2.z = p.z = isamCurrentEstimate.at<gtsam::Pose3>(node_idx).translation().z();
     p.roll = isamCurrentEstimate.at<gtsam::Pose3>(node_idx).rotation().roll();
     p.pitch = isamCurrentEstimate.at<gtsam::Pose3>(node_idx).rotation().pitch();
     p.yaw = isamCurrentEstimate.at<gtsam::Pose3>(node_idx).rotation().yaw();
@@ -244,7 +260,44 @@ void PGO::Run() {
     keyframePosesUpdated.push_back(pose_curr); // init
     keyframeTimes.push_back(curr_odom_time_);
 
-    scManager.makeAndSaveScancontextAndKeys(*thisKeyFrame);
+    pcl::PointXYZI point;
+    point.x = pose_curr.x;
+    point.y = pose_curr.y;
+    point.z = pose_curr.z;
+    keyframePoints->points.push_back(point);
+    point.z = 0;
+    keyposes_cloud_->points.push_back(point);
+
+    // use sc detector
+    if (loop_method == 1) {
+      scManager.makeAndSaveScancontextAndKeys(*thisKeyFrame);
+    } else if (loop_method == 2) {
+      pcl::PointCloud<pcl::PointXYZI>::Ptr pc_filtered(new pcl::PointCloud<pcl::PointXYZI>());
+      iscGeneration.ground_filter(thisKeyFrame, pc_filtered); // 对z高度进行截取，粗略的去除地面
+      ISCDescriptor desc = iscGeneration.calculate_isc(pc_filtered); // 计算非地面点云的sc特征
+      Eigen::Vector3d current_t(pose_curr.x, pose_curr.y, pose_curr.z); // 当前odom位置
+
+      //dont change push_back sequence
+      if (iscGeneration.travel_distance_arr.size() == 0) {
+        iscGeneration.travel_distance_arr.push_back(0);
+      } else {
+        // 这里是计算里程距离？
+        double dis_temp = iscGeneration.travel_distance_arr.back()
+            + std::sqrt((iscGeneration.pos_arr.back() - current_t).array().square().sum());
+        iscGeneration.travel_distance_arr.push_back(dis_temp);
+      }
+      iscGeneration.pos_arr.push_back(current_t); // odom装到这里
+      iscGeneration.isc_arr.push_back(desc); // isc特征全部装到这里面
+
+      // 发布isc图像
+      cv_bridge::CvImage out_msg;
+      out_msg.header.frame_id = "camera_init";
+      out_msg.header.stamp = ros::Time().fromSec(curr_odom_time_);
+      out_msg.encoding = sensor_msgs::image_encodings::RGB8;
+      out_msg.image = iscGeneration.getLastISCRGB();
+      isc_pub.publish(out_msg.toImageMsg());
+    }
+
     laserCloudMapPGORedraw = true;
     mKF.unlock();
 
@@ -278,6 +331,7 @@ void PGO::Run() {
                                                           curr_node_idx,
                                                           poseFrom.between(poseTo),
                                                           odomNoise));
+
         // gps factor
         if (hasGPSforThisKF) {
           double curr_altitude_offseted = curr_gps_->altitude - gpsAltitudeInitOffset;
@@ -295,8 +349,8 @@ void PGO::Run() {
 
       // publish odom
       nav_msgs::Odometry odomAftPGOthis;
-      odomAftPGOthis.header.frame_id = "map";
-      odomAftPGOthis.child_frame_id = "velo_link";
+      odomAftPGOthis.header.frame_id = "camera_init";
+      odomAftPGOthis.child_frame_id = "aft_mapped";
       odomAftPGOthis.header.stamp = ros::Time().fromSec(curr_odom_time_);
       odomAftPGOthis.pose.pose.position.x = keyframePosesUpdated.front().x;
       odomAftPGOthis.pose.pose.position.y = keyframePosesUpdated.front().y;
@@ -305,9 +359,11 @@ void PGO::Run() {
           tf::createQuaternionMsgFromRollPitchYaw(keyframePosesUpdated.front().roll,
                                                   keyframePosesUpdated.front().pitch,
                                                   keyframePosesUpdated.front().yaw);
+      final_odom_pub.publish(odomAftPGOthis); // last pose
+
 
       // tf
-    /*  static tf::TransformBroadcaster br;
+      static tf::TransformBroadcaster br;
       tf::Transform transform;
       tf::Quaternion q;
       transform.setOrigin(tf::Vector3(odomAftPGOthis.pose.pose.position.x,
@@ -318,9 +374,7 @@ void PGO::Run() {
       q.setY(odomAftPGOthis.pose.pose.orientation.y);
       q.setZ(odomAftPGOthis.pose.pose.orientation.z);
       transform.setRotation(q);
-      br.sendTransform(tf::StampedTransform(transform, odomAftPGOthis.header.stamp, "map", "velo_link"));
-*/
-      final_odom_pub.publish(odomAftPGOthis); // last pose
+      br.sendTransform(tf::StampedTransform(transform, odomAftPGOthis.header.stamp, "camera_init", "aft_mapped"));
 
       // 100真输出一次node数量
       if (curr_node_idx % 100 == 0)
@@ -333,22 +387,123 @@ void PGO::PerformSCLoopClosure() {
   if (keyframePoses.size() < scManager.NUM_EXCLUDE_RECENT) // do not try too early
     return;
 
-  auto detectResult = scManager.detectLoopClosureID(); // first: nn index, second: yaw diff
-  int SCclosestHistoryFrameID = detectResult.first;
-  if (SCclosestHistoryFrameID != -1) {
-    const int prev_node_idx = SCclosestHistoryFrameID;
-    const int curr_node_idx = keyframePoses.size() - 1; // because cpp starts 0 and ends n-1
-    ROS_WARN("Loop detected! - between %d and %d", prev_node_idx, curr_node_idx);
+  if (loop_method == 1) {
+    auto detectResult = scManager.detectLoopClosureID(); // first: nn index, second: yaw diff
+    int SCclosestHistoryFrameID = detectResult.first;
+    if (SCclosestHistoryFrameID != -1) {
+      const int prev_node_idx = SCclosestHistoryFrameID;
+      const int curr_node_idx = keyframePoses.size() - 1; // because cpp starts 0 and ends n-1
+      ROS_WARN("Loop detected! - between %d and %d", prev_node_idx, curr_node_idx);
 
-    mutex_.lock();
-    loop_queue_.push(std::pair<int, int>(prev_node_idx, curr_node_idx));
-    // addding actual 6D constraints in the other thread, icp refine.
-    mutex_.unlock();
+      double
+          distance = sqrt(std::pow((keyframePosesUpdated[prev_node_idx].x - keyframePosesUpdated[curr_node_idx].x), 2) +
+          std::pow((keyframePosesUpdated[prev_node_idx].y - keyframePosesUpdated[curr_node_idx].y), 2));
+      std::cout << "distance: " << distance << std::endl;
+
+      if (distance > 20.0) {
+        ROS_ERROR("BAD SC RESULT..");
+      } else {
+        mutex_.lock();
+        loop_queue_.push(std::pair<int, int>(prev_node_idx, curr_node_idx));
+        // addding actual 6D constraints in the other thread, icp refine.
+        mutex_.unlock();
+      }
+    }
+  } else if (loop_method == 0) {
+    // 寻找最近的pose
+    int curr_node_idx = keyframePosesUpdated.size() - 1;
+
+    pcl::PointXYZI currentRobotPosPoint;
+    currentRobotPosPoint.x = keyframePosesUpdated[curr_node_idx].x;
+    currentRobotPosPoint.y = keyframePosesUpdated[curr_node_idx].y;
+    currentRobotPosPoint.z = 0;
+
+    std::vector<int> pointSearchIndLoop;
+    std::vector<float> pointSearchSqDisLoop;
+    kdtreeHistoryKeyPoses->setInputCloud(keyframePoints);
+    kdtreeHistoryKeyPoses->radiusSearch(currentRobotPosPoint,
+                                        20.0,
+                                        pointSearchIndLoop,
+                                        pointSearchSqDisLoop,
+                                        0);
+    //std::cout << "pose number: " << keyposes_cloud_->size() << ", " << pointSearchIndLoop.size() << std::endl;
+
+    int closestHistoryFrameID = -1;
+    for (int i = 0; i < pointSearchIndLoop.size(); ++i) {
+      int id = pointSearchIndLoop[i];
+      if (std::abs(keyframeTimes[id] - curr_odom_time_) > 30.0) {
+        closestHistoryFrameID = id;
+        break;
+      }
+    }
+    if (closestHistoryFrameID != -1) {
+      int prev_node_idx = closestHistoryFrameID;
+      double
+          distance = sqrt(std::pow((keyframePosesUpdated[prev_node_idx].x - keyframePosesUpdated[curr_node_idx].x), 2) +
+          std::pow((keyframePosesUpdated[prev_node_idx].y - keyframePosesUpdated[curr_node_idx].y), 2));
+      std::cout << "distance: " << distance << std::endl;
+
+      if (distance < 30.0) {
+        mutex_.lock();
+        loop_queue_.push(std::pair<int, int>(prev_node_idx, curr_node_idx));
+        mutex_.unlock();
+      } else {
+        ROS_ERROR("BAD detection RESULT..");
+      }
+    }
+  } else if (loop_method == 2) {
+    // 使用ISC
+    int curr_node_idx = keyframePosesUpdated.size() - 1;
+
+    //search for the near neibourgh pos
+    int prev_node_idx = 0;
+    double best_score = 0.0;
+    for (int i = 0; i < keyframePosesUpdated.size(); i++) { // 遍历之前点云帧的isc特征
+      double delta_travel_distance =
+          iscGeneration.travel_distance_arr.back() - iscGeneration.travel_distance_arr[i]; // 先检测是否存在距离最近的帧
+      double pos_distance =
+          std::sqrt((iscGeneration.pos_arr[i] - iscGeneration.pos_arr.back()).array().square().sum());  // 两帧空间距离
+      // 我们认为里程距离越大，空间距离越小，越可能是回环
+      if (delta_travel_distance > SKIP_NEIBOUR_DISTANCE
+          && pos_distance < delta_travel_distance * INFLATION_COVARIANCE) {
+        double geo_score = 0;
+        double inten_score = 0;
+        if (iscGeneration.is_loop_pair(iscGeneration.isc_arr[curr_node_idx],
+                                       iscGeneration.isc_arr[i],
+                                       geo_score,
+                                       inten_score)) { // 计算isc的几何以及强度得分
+          if (geo_score + inten_score > best_score) {  // 如果得分满足阈值，则认为是回环位置
+            best_score = geo_score + inten_score;
+            prev_node_idx = i;
+          }
+        }
+
+      }
+    }
+    if (prev_node_idx != 0) {
+      //matched_frame_id.push_back(best_matched_id);
+      ROS_WARN("received loop closure candidate: current: %d, history %d, total_score %f",
+               curr_node_idx,
+               prev_node_idx,
+               best_score);
+
+      double
+          distance = sqrt(std::pow((keyframePosesUpdated[prev_node_idx].x - keyframePosesUpdated[curr_node_idx].x), 2) +
+          std::pow((keyframePosesUpdated[prev_node_idx].y - keyframePosesUpdated[curr_node_idx].y), 2));
+      std::cout << "distance: " << distance << std::endl;
+      if (distance < 20) {
+        mutex_.lock();
+        loop_queue_.push(std::pair<int, int>(prev_node_idx, curr_node_idx));
+        mutex_.unlock();
+      } else {
+        ROS_ERROR("bad isc result");
+      }
+    }
   }
 }
 
 void PGO::LoopClosure() {
-  ros::Rate rate(1.0);
+  ros::Rate rate(2.0);
   while (ros::ok()) {
     rate.sleep();
     PerformSCLoopClosure();
@@ -362,7 +517,7 @@ void PGO::LoopClosure() {
 }
 
 void PGO::ICPRefine() {
-  ros::Rate rate(10.0);
+  ros::Rate rate(5.0);
   while (ros::ok()) {
     if (!loop_queue_.empty()) {
       if (loop_queue_.size() > 30) {
@@ -404,9 +559,9 @@ void PGO::ICPRefine() {
         ROS_INFO("LOOP REJECT %f", final_score);
         return;
       } else {
-        ROS_INFO("LOOP DETECT SUCCESS %f", final_score);
-
+        ROS_WARN("LOOP DETECT  SUCCESS %f,", final_score);
       }
+
       // 闭环成功的存到这里
       loop_pairs_.push_back(std::pair<int, int>(_loop_kf_idx, _curr_kf_idx));
 
@@ -437,7 +592,7 @@ void PGO::ICPRefine() {
 }
 
 void PGO::MapVisualization() {
-  ros::Rate rate(0.2);
+  ros::Rate rate(0.1);
   while (ros::ok()) {
     rate.sleep();
     if (keyframeLaserClouds.size() > 1 && keyframePosesUpdated.size() > 1)
@@ -527,9 +682,7 @@ void PGO::SaveMap() {
   int num_points = 0, num_points1 = 0;
   pcl::PointCloud<PointT>::Ptr map(new pcl::PointCloud<PointT>());
   for (int i = 0; i < keyframeLaserClouds.size(); ++i) {
-    *map += *
-        TransformCloud2Map(keyframeLaserClouds[i], keyframePosesUpdated[i]
-        );
+    *map += *TransformCloud2Map(keyframeLaserClouds[i], keyframePosesUpdated[i]);
   }
   map->width = map->points.size();
   map->height = 1;
@@ -539,7 +692,7 @@ void PGO::SaveMap() {
   //  map_no_ground->height = 1;
   //  map_no_ground->is_dense = false;
   pcl::PointCloud<PointT>::Ptr poses(new pcl::PointCloud<PointT>());
-  pcl::copyPointCloud(*keyposes_cloud_, *poses);
+  pcl::copyPointCloud(*keyframePoints, *poses);
   poses->width = poses->points.size();
   poses->height = 1;
   poses->is_dense = false;
@@ -547,9 +700,9 @@ void PGO::SaveMap() {
   downSizeFilterMapPGO.filter(*map);
 
   pcl::io::savePCDFile(file_path + "trajectory.pcd", *poses);
-  pcl::io::savePCDFile(file_path + "finalCloud.pcd", *map);
+  pcl::io::savePCDFile(file_path + "finalMap.pcd", *map);
 
-// 保存odom的csv
+  // 保存odom的csv
   ROS_WARN("save odom csv files and g2o");
   std::ofstream outFile, outFile2;
   outFile.open(file_path + "odom_final.csv", std::ios::out);
@@ -580,8 +733,10 @@ void PGO::SaveMap() {
 
 void PGO::PublishPoseAndFrame() {
   // pub odom and path
-  keyposes_cloud_->clear();
-  //nav_msgs::Odometry odomAftPGO;
+//  keyframePoints->clear();
+  // nav_msgs::Odometry odomAftPGO;
+  if (keyframePoints->empty() || keyframePosesUpdated.size() < 1)
+    return;
 
   // publish map every 2 frame
   int SKIP_FRAMES = 2;
@@ -609,11 +764,11 @@ void PGO::PublishPoseAndFrame() {
 //    poseStampAftPGO.header = odomAftPGOthis.header;
 //    poseStampAftPGO.pose = odomAftPGOthis.pose.pose;
 
-    PointT pt;
-    pt.x = pose_est.x;
-    pt.y = pose_est.y;
-    pt.z = pose_est.z;
-    keyposes_cloud_->points.push_back(pt);
+//    pcl::PointXYZI pt;
+//    pt.x = pose_est.x;
+//    pt.y = pose_est.y;
+//    pt.z = pose_est.z;
+//    keyframePoints->points.push_back(pt);
 
     if (counter % SKIP_FRAMES == 0) {
       *laserCloudMapPGO += *TransformCloud2Map(keyframeLaserClouds[node_idx], keyframePosesUpdated[node_idx]);
@@ -640,31 +795,37 @@ void PGO::PublishPoseAndFrame() {
 
   // key poses
   sensor_msgs::PointCloud2 msg;
-  pcl::toROSMsg(*keyposes_cloud_, msg);
-  msg.header.frame_id = "map";
+  pcl::toROSMsg(*keyframePoints, msg);
+  msg.header.frame_id = "camera_init";
   msg.header.stamp = ros::Time::now();
   pose_pub.publish(msg);
 
   // publish map
-  downSizeFilterMapPGO.setInputCloud(laserCloudMapPGO);
-  downSizeFilterMapPGO.filter(*laserCloudMapPGO);
+  downSizePublishCloud.setInputCloud(laserCloudMapPGO);
+  downSizePublishCloud.filter(*laserCloudMapPGO);
   sensor_msgs::PointCloud2 laserCloudMapPGOMsg;
   pcl::toROSMsg(*laserCloudMapPGO, laserCloudMapPGOMsg);
-  laserCloudMapPGOMsg.header.frame_id = "map";
+  laserCloudMapPGOMsg.header.frame_id = "camera_init";
   map_pub.publish(laserCloudMapPGOMsg);
+
+  // isc
+/*  if (loop_method == 2) {
+    // 发布isc图像
+    cv_bridge::CvImage out_msg;
+    out_msg.header.frame_id = "camera_init";
+    out_msg.header.stamp = ros::Time().fromSec(curr_odom_time_);
+    out_msg.encoding = sensor_msgs::image_encodings::RGB8;
+    out_msg.image = iscGeneration.getLastISCRGB();
+    isc_pub.publish(out_msg.toImageMsg());
+  }*/
 }
 
-/**
- * @brief create visualization marker
- * @param stamp
- * @return
- */
 visualization_msgs::MarkerArray PGO::CreateMarker(const ros::Time &stamp) {
   visualization_msgs::MarkerArray marker_array;
   visualization_msgs::Marker traj_marker, edge_marker, loop_marker;
 
   // node markers
-  traj_marker.header.frame_id = "map";
+  traj_marker.header.frame_id = "camera_init";
   traj_marker.header.stamp = stamp;
   traj_marker.ns = "nodes";
   traj_marker.id = 0;
@@ -673,13 +834,13 @@ visualization_msgs::MarkerArray PGO::CreateMarker(const ros::Time &stamp) {
   traj_marker.scale.x = traj_marker.scale.y = traj_marker.scale.z = 1.5;
   std_msgs::ColorRGBA color;
   color.r = 0.0;
-  color.g = 0.5;
+  color.g = 0.0;
   color.b = 1.0;
   color.a = 1.0;
   traj_marker.color = color;
 
   // edge markers
-  edge_marker.header.frame_id = "map";
+  edge_marker.header.frame_id = "camera_init";
   edge_marker.header.stamp = stamp;
   edge_marker.ns = "edges";
   edge_marker.id = 1;
@@ -713,14 +874,14 @@ visualization_msgs::MarkerArray PGO::CreateMarker(const ros::Time &stamp) {
 
   // loop markers
   if (loop_pairs_.size() > 0) {
-    loop_marker.header.frame_id = "map";
+    loop_marker.header.frame_id = "camera_init";
     loop_marker.header.stamp = stamp;
     loop_marker.ns = "loop";
     loop_marker.id = 2;
     loop_marker.type = visualization_msgs::Marker::LINE_STRIP;
 
     loop_marker.pose.orientation.w = 1.0;
-    loop_marker.scale.x = 1.0;
+    loop_marker.scale.x = loop_marker.scale.y = loop_marker.scale.z = 1.0;
     loop_marker.color.r = 1.0;
     loop_marker.color.g = 0.0;
     loop_marker.color.b = 0.0;

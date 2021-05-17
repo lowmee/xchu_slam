@@ -17,6 +17,10 @@
   1.传统的邻域距离搜索+ICP匹配。
 
   2.基于scan context的回环检测。
+  
+  ![image-20210515162904564](/home/xchu/Pictures/image-2.png)
+  
+  ![image-20210515161441905](/home/xchu/Pictures/image-20210515161441905.png)
 
 ![TIM图片20201127144515](README/TIM%E5%9B%BE%E7%89%8720201127144515.png)
 
@@ -33,7 +37,7 @@
 1. Run the launch file:
 
 ```shell
-roslaunch xchu_mapping  mapping.launch 
+roslaunch xchu_mapping  xchu_mapping.launch 
 ```
 
 2. Play existing bag files kitti, bag包播放时请0.1倍速，因为目前性能上还未优化，在bag包播放完成后，建图也将结束。
@@ -77,11 +81,11 @@ rosservice call /save_map
 
 下图是优化后的kitti轨迹（version 1.0）
 
-![image-20201125061549588](README/image-20201125061549588.png)
+![image-20210514165652113](/home/xchu/.config/Typora/typora-user-images/image-20210514165652113.png)
 
 高度上偏移纠正回来了。
 
-![image-20201125061617522](README/image-20201125061617522.png)
+![image-20210514165706072](/home/xchu/.config/Typora/typora-user-images/image-20210514165706072.png)
 
 ### Reference
 
@@ -98,5 +102,3 @@ rosservice call /save_map
 **11.29**：1.0稳定版，gtsam的bug依然存在，但已注释掉。此外优化时间同步。
 
 **11.28**：引入GNSS初始化，改进里程计精度，红色为因子图增量平滑后的关键帧位姿，绿色为GNSS轨迹，蓝色为激光雷达odom
-
-![image-20201128100931867](README/image-20201128100931867.png)因子图加入gps factor时，gtsam会报错，原因不明，可以设置use_gps = false：
