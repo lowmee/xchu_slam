@@ -71,9 +71,9 @@ class LidarOdom {
   sensor_msgs::Imu imu;
   nav_msgs::Odometry odom;
 
-  MethodType _method_type = MethodType::use_cpu;
+  MethodType _method_type;
   pcl::NormalDistributionsTransform<pcl::PointXYZI, pcl::PointXYZI> pcl_ndt;
-  cpu::NormalDistributionsTransform<pcl::PointXYZI, pcl::PointXYZI> cpu_ndt;  // cpu方式  --可以直接调用吗??可以
+  cpu::NormalDistributionsTransform<pcl::PointXYZI, pcl::PointXYZI> cpu_ndt;  // cpu方式
   pclomp::NormalDistributionsTransform<pcl::PointXYZI, pcl::PointXYZI>::Ptr omp_ndt;
 
   // 设置变量,用以接受ndt配准后的参数
@@ -86,22 +86,17 @@ class LidarOdom {
   float ndt_res;      // Resolution
   double step_size;   // Step size
   double trans_eps;  // Transformation epsilon
-  Eigen::Matrix4f gnss_transform;  // 保存GPS信号的变量
-
-  // 读写文件流相关
-  std::ofstream ofs; // 写csv文件
-  std::string filename;
 
   pcl::PointCloud<pcl::PointXYZI> localmap, globalmap, tmp_map;
 
 #ifdef CUDA_FOUND
   gpu::GNormalDistributionsTransform gpu_ndt;
-  // TODO:此处增加共享内存方式的gpu_ndt_ptr
    std::shared_ptr<gpu::GNormalDistributionsTransform> gpu_ndt = std::make_shared<gpu::GNormalDistributionsTransform>();
 #endif
 
   double min_add_scan_shift;  // 定义将点云添加到locaMap里的最小间隔值  --应该是添加到localMap吧??
   int initial_scan_loaded = 0;
+  int surround_search_num_ = 0;
 
   bool _incremental_voxel_update = false;
   ros::Time callback_start, callback_end, t1_start, t1_end, t2_start, t2_end, t3_start, t3_end, ndt_start, ndt_end,
@@ -110,6 +105,7 @@ class LidarOdom {
   int submap_num = 0;
   double localmap_size = 0.0;
   double max_localmap_size, odom_size;
+  double shift = 0.0;
 
   double _tf_x, _tf_y, _tf_z, _tf_roll, _tf_pitch, _tf_yaw;
   Eigen::Matrix4f tf_b2l, tf_l2b;
@@ -119,6 +115,8 @@ class LidarOdom {
   bool _use_odom = false;
   bool _imu_upside_down = false;  // 用以解决坐标系方向(正负变换)问题 (比如x变更为-x等)
   int method_type_temp = 0;
+
+  //pcl::PointCloud<pcl::PointXYZI>::Ptr localmap_ptr;
 
   // mutex
   std::mutex mutex_lock;
@@ -131,8 +129,12 @@ class LidarOdom {
   pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterLocalmap; // for global map visualization
 
   pcl::PointCloud<PointT>::Ptr cloud_keyposes_3d_;
+  std::vector<Eigen::Matrix4f> cloud_keyposes_;
 
-  pcl::PointCloud<pcl::PointXYZI>::Ptr scan_ptr;
+  std::deque<pcl::PointCloud<PointT>::Ptr> recent_keyframes_;
+  std::vector<pcl::PointCloud<PointT>::Ptr> cloud_keyframes_;
+
+  pcl::PointCloud<pcl::PointXYZI>::Ptr scan_ptr, pc_target_;
   pcl::PointCloud<pcl::PointXYZI>::Ptr transformed_scan_ptr;
 
   Eigen::Matrix4f t_localizer;
@@ -187,6 +189,10 @@ class LidarOdom {
   void odom_info(const nav_msgs::Odometry &input);
 
   void imu_info(const sensor_msgs::Imu &input);
+
+  void ExtractSurroundKeyframes();
+
+  void ExtractSurroundKeyframesByDis();
 };
 
 #endif

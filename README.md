@@ -1,30 +1,30 @@
 # XCHU_SLAM
 
+![image-20210518193239714](README/image-20210518193239714.png)
+
 ## Introduction
 
-- GPS ODOM：简单的全局odom，采用gnss作为位置，姿态为距离GNSS帧最近的imu帧的姿态。
-
-- 里程计：基于NDT的里程计，利用imu、编码器来优化初始位姿估计，基于匀速运动模型，当同时使用编码器和imu时，选取imu的姿态和编码器的速度信息。初始化采用GNSS，不再是单位矩阵。
+- 里程计：基于NDT的里程计，利用imu、编码器来优化初始位姿估计，基于匀速运动模型，当同时使用编码器和imu时，选取imu的姿态和编码器的速度信息。
 
 - 局部地图：采用两种策略的localmap, 实测方法2效果更好
   1.基于关键帧数量选取, 关键帧数量够则滑窗更新, 去除旧的加入新的
   2.基于距离选取关键帧, 基于localmap距离阈值刷新, 每个周期内localmap关键帧数量从1开始增加
-  
+
 - 后端优化：取协方差较小的GPS位置加入因子图中（暂不可用）。
 
-- 回环检测：两种方法，2在laucnh文件中可选择开启
+- 回环检测：三种方法，
 
   1.传统的邻域距离搜索+ICP匹配。
 
   2.基于scan context的回环检测。
   
+  3.基于Intensity scan context的回环检测。（目前不稳定，可能崩掉）
+  
+  下图中，蓝色表示因子图中的位姿节点，红色线段表示回环约束边，绿色线段表示里程计相对位姿约束。
+  
   ![image-20210515162904564](/home/xchu/Pictures/image-2.png)
   
   ![image-20210515161441905](/home/xchu/Pictures/image-20210515161441905.png)
-
-![TIM图片20201127144515](README/TIM%E5%9B%BE%E7%89%8720201127144515.png)
-
-![TIM图片20201129022429](README/TIM%E5%9B%BE%E7%89%8720201129022429.png)
 
 ## Dependency
 
@@ -40,36 +40,58 @@
 roslaunch xchu_mapping  xchu_mapping.launch 
 ```
 
-2. Play existing bag files kitti, bag包播放时请0.1倍速，因为目前性能上还未优化，在bag包播放完成后，建图也将结束。
+2. Play existing bag files kitti, bag包播放时请1倍速，因为是SLAM系统，在bag包播放完成后，节点将暂停，可能出现bag包播完了，但里程计还未跑完的情况。
 
 ```shell
-rosbag play kitti_2011_10_03_drive_0027_synced.bag --clock -r 0.1
+rosbag play kitti_2011_10_03_drive_0027_synced.bag --clock
 ```
 
-   3.ctrl+c关闭终端则自动保存地图到xchu_slam/pcd中，或者执行rosservice
+   3.ctrl+c关闭终端则自动保存地图到xchu_mapping/pcd中
 
-```bash
-rosservice call /save_map 
+### 性能及实验
+
+在KITTI 01上序列上进行测试，需要将ground truth拷贝到文件夹下，安装evo工具，并将KITTI gt转换为TUM格式。
+
+- APE评估，RMSE=1.61m
+
+```sh
+evo_ape tum  00.txt odom_tum.txt -p --plot_mode=xz -a 
 ```
 
-### 重要参数
+![image-20210518194321684](README/image-20210518194321684.png)
 
-- keyframe_dist：关键帧的选取距离，太近容易重影，太远丢失细节
-- surround_search_num：locamap的点云帧数量，太大导致拼localmap时效率变慢，精度却不一定变好
-- use_odom: 是否使用编码器，在launch文件中可修改
-- use_imu：是否使用imu，在launch中修改，可同时支持imu和编码器
-- use_gps: 是否使用GPS初始化，是否在后端优化中引入GPS factor.
-- use_sc_detect: 是否使用scan context进行回环检测
-- history_search_num_： 回环检测时选取的邻域内的点云帧数量
+![image-20210518194349334](README/image-20210518194349334.png)
 
-其余参数应该默认就可以了，不需要自行修改。
+![image-20210518194401167](README/image-20210518194401167.png)
+
+- RPE评估，RMSE = 3.405m
+```sh
+evo_rpe tum  00.txt odom_tum.txt -p --plot_mode=xz -a 
+```
+
+![image-20210518194532291](README/image-20210518194532291.png)
+
+![image-20210518194601710](README/image-20210518194601710.png)
+
+![image-20210518194612755](README/image-20210518194612755.png)
+
+- 轨迹误差，漂移约16.569m/3724.187m=0.44%
+
+```sh
+evo_traj tum  00.txt odom_tum.txt --ref=00.txt -p -a --plot_mode=xyz
+```
+
+![image-20210518194038049](README/image-20210518194038049.png)
+
+![image-20210518194013841](README/image-20210518194013841.png)
+
+![image-20210518194240755](README/image-20210518194240755.png)
+
+关闭终端会在pcd文件夹中生成tum格式的pose数据odom_tum.txt，可以利用evo工具计算其RPE和APE误差。
+
+![image-20210518192942245](README/image-20210518192942245.png)
 
 
-## Issues
-
-- 线程安全
-- pitch 的累计误差导致高度漂移问题
-- 位姿有抖动情况
 
 ## TODOs
 
@@ -94,11 +116,3 @@ rosservice call /save_map
 - **LIO SAM**
 - **AUTOWARE**
 - **NDT_OMP**
-
-### 更新说明
-
-**11.30**：引入scan context回环检测方法，并可视化scan context特征图像。
-
-**11.29**：1.0稳定版，gtsam的bug依然存在，但已注释掉。此外优化时间同步。
-
-**11.28**：引入GNSS初始化，改进里程计精度，红色为因子图增量平滑后的关键帧位姿，绿色为GNSS轨迹，蓝色为激光雷达odom

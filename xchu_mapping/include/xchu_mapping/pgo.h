@@ -110,6 +110,8 @@ class PGO {
 
   std::string save_dir_;
 
+  double time_stamp_ = 0.0;
+  bool init_time = false;
   double curr_odom_time_ = 0;
   pcl::PointCloud<PointT>::Ptr curr_frame_;
   pcl::PointCloud<PointT>::Ptr laserCloudMapAfterPGO;

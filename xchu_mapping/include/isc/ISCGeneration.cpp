@@ -198,13 +198,13 @@ double ISCGeneration::calculate_geometry_dis(const ISCDescriptor &desc1, const I
   }
   return similarity / (sectors * rings);
 }
+
 double ISCGeneration::calculate_intensity_dis(const ISCDescriptor &desc1, const ISCDescriptor &desc2, int &angle) {
   double difference = 1.0;
   // 密度结构匹配 计算上一步最佳列旋转后的和候选帧的ISC的密度相似度
   // 取ISC对应列的余弦距离的均值
   double angle_temp = angle;
   for (int i = angle_temp - 10; i < angle_temp + 10; i++) {
-
     int match_count = 0;
     int total_points = 0;
     for (int p = 0; p < sectors; p++) {

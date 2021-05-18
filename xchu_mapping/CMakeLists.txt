@@ -157,3 +157,10 @@ target_link_libraries(pgo_g2o_node
         #        ${CERES_LIBRARIES}
 #        ${OpenCV_LIBRARIES}
         )
+
+#add_executable(evaluate
+#        evaluate/evaluate_odometry.cpp
+#        evaluate/matrix.cpp
+#        evaluate/mail.h)
+#target_link_libraries(pgo_g2o_node
+#)
