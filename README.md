@@ -40,13 +40,15 @@
 roslaunch xchu_mapping  xchu_mapping.launch 
 ```
 
-2. Play existing bag files kitti, bag包播放时请1倍速，因为是SLAM系统，在bag包播放完成后，节点将暂停，可能出现bag包播完了，但里程计还未跑完的情况。
+2. Play   kitti 00 bag, bag包播放时请1倍速，因为是SLAM系统，在bag包播放完成后，节点将暂停，可能出现bag包播完了，但里程计还未跑完的情况。
 
 ```shell
 rosbag play kitti_2011_10_03_drive_0027_synced.bag --clock
 ```
 
-   3.ctrl+c关闭终端则自动保存地图到xchu_mapping/pcd中
+   3.ctrl+c关闭终端则自动保存地图到xchu_mapping/pcd中。关闭终端会在pcd文件夹中生成tum格式的pose数据odom_tum.txt，可以利用evo工具计算其RPE和APE误差。
+
+![image-20210518192942245](README/image-20210518192942245.png)
 
 ### 性能及实验
 
@@ -87,10 +89,6 @@ evo_traj tum  00.txt odom_tum.txt --ref=00.txt -p -a --plot_mode=xyz
 
 ![image-20210518194240755](README/image-20210518194240755.png)
 
-关闭终端会在pcd文件夹中生成tum格式的pose数据odom_tum.txt，可以利用evo工具计算其RPE和APE误差。
-
-![image-20210518192942245](README/image-20210518192942245.png)
-
 
 
 ## TODOs
@@ -103,11 +101,11 @@ evo_traj tum  00.txt odom_tum.txt --ref=00.txt -p -a --plot_mode=xyz
 
 下图是优化后的kitti轨迹（version 1.0）
 
-![image-20210514165652113](/home/xchu/.config/Typora/typora-user-images/image-20210514165652113.png)
+![image-20210514165652113](README/image-20210514165652113.png)
 
 高度上偏移纠正回来了。
 
-![image-20210514165706072](/home/xchu/.config/Typora/typora-user-images/image-20210514165706072.png)
+![image-20210514165706072](README/image-20210514165706072.png)
 
 ### Reference
 
