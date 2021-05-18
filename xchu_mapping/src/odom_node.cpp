@@ -15,7 +15,7 @@ int main(int argc, char **argv) {
   ROS_INFO("\033[1;32m---->\033[0m XCHU Odometry Started.");
 
   LidarOdom mapping;
-  ros::Rate rate(100);
+  ros::Rate rate(200);
   while (ros::ok()) {
     mapping.Run();
     ros::spinOnce();
@@ -42,7 +42,7 @@ void LidarOdom::ParamInitial() {
   nh.param<float>("ndt_resolution", ndt_res, 2.0);
   nh.param<double>("ndt_step_size", step_size, 0.1);
   nh.param<double>("ndt_trans_eps", trans_eps, 0.01);
-  nh.param<int>("ndt_max_iter", max_iter, 20);
+  nh.param<int>("ndt_max_iter", max_iter, 30);
   nh.param<double>("min_add_scan_shift", min_add_scan_shift, 0.5);
   nh.param<int>("surround_search_num_", surround_search_num_, 20);
   nh.param<double>("max_submap_size", max_localmap_size, 5);
@@ -182,7 +182,8 @@ void LidarOdom::Run() {
 
       // 匹配
       // ExtractSurroundKeyframes();
-      ExtractSurroundKeyframesByDis();
+
+      //ExtractSurroundKeyframesByDis();
 
       OdomEstimate(pointcloud_in, current_scan_time);
     }
@@ -196,7 +197,7 @@ void LidarOdom::Run() {
       mutex_lock.unlock();
       // 匹配
       // ExtractSurroundKeyframes();
-      ExtractSurroundKeyframesByDis();
+      //ExtractSurroundKeyframesByDis();
 
       OdomEstimate(pointcloud_in, current_scan_time);
     }
@@ -228,29 +229,14 @@ void LidarOdom::OdomEstimate(const pcl::PointCloud<pcl::PointXYZI>::Ptr &filtere
     ROS_INFO("new ndt target set");
     initial_scan_loaded = 1;
   }
-
-  //pcl::PointCloud<pcl::PointXYZI>::Ptr localmap_ptr(new pcl::PointCloud<pcl::PointXYZI>(localmap));
-  // pc_target_.reset(new pcl::PointCloud<pcl::PointXYZI>(localmap));
-//  if (_method_type == MethodType::use_pcl) {
-//    pcl_ndt.setInputSource(filtered_scan_ptr);
-//    //pcl_ndt.setInputTarget(pc_target_);
-//  } else if (_method_type == MethodType::use_cpu) {
-//    cpu_ndt.setInputSource(filtered_scan_ptr);
-//    //cpu_ndt.setInputTarget(pc_target_);
-//  } else if (_method_type == MethodType::use_omp) {
-//    omp_ndt->setInputSource(filtered_scan_ptr);
-//    //omp_ndt->setInputTarget(pc_target_);
-//  } else {
-//    ROS_ERROR("Please Define _method_type to conduct NDT");
-//    return;
-//  }
-
+  pc_target_.reset(new pcl::PointCloud<pcl::PointXYZI>(localmap));
+  // pcl::PointCloud<PointT>::Ptr localmap_ptr(new pcl::PointCloud<PointT>(localmap));
   ros::Time test_time_3 = ros::Time::now();  // TODO:
-// 计算初始姿态，上一帧点云结果+两针之间的匀速运动估计
+
+  // 计算初始姿态，上一帧点云结果+两针之间的匀速运动估计
   guess_pose = previous_pose + diff_pose;
-  //guess_pose.pitch = previous_pose.pitch;
-  //guess_pose.roll = previous_pose.roll;
-//  std::cout << "previous guess: " << previous_pose << ", " << guess_pose << std::endl;
+  // guess_pose.pitch = previous_pose.pitch;
+  // guess_pose.roll = previous_pose.roll;
 
 // 根据是否使用imu和odom,按照不同方式更新guess_pose(xyz,or/and rpy)
   Pose6D guess_pose_for_ndt;
@@ -331,7 +317,7 @@ void LidarOdom::OdomEstimate(const pcl::PointCloud<pcl::PointXYZI>::Ptr &filtere
   current_velocity_imu_z = current_velocity_z;
 
 // Update position and posture. current_pos -> previous_pos
-  shift = sqrt(pow(current_pose.x - previous_pose.x, 2.0) + pow(current_pose.y - previous_pose.y, 2.0));
+  double shift = sqrt(pow(current_pose.x - previous_pose.x, 2.0) + pow(current_pose.y - previous_pose.y, 2.0));
 
   previous_pose = current_pose_imu = current_pose_odom = current_pose_imu_odom = current_pose;
   previous_scan_time = current_scan_time;
@@ -342,37 +328,36 @@ void LidarOdom::OdomEstimate(const pcl::PointCloud<pcl::PointXYZI>::Ptr &filtere
 // Calculate the shift between added_pos and current_pos // 以确定是否更新全局地图
 // added_pose 将一直定位于localMap的原点
   ros::Time test_time_5 = ros::Time::now();
-//  if (shift >= min_add_scan_shift) {
-//    localmap_size += shift;
-//    odom_size += shift;
-//
-//// 只有在fitnessscore状态好的情况下才选取作为关键帧加入到localmap中
-//// 这里的下采样网格大小将严重影响见图效果
-//    downSizeFilterLocalmap.setInputCloud(transformed_scan_ptr);
-//    downSizeFilterLocalmap.filter(*transformed_scan_ptr);
-//    localmap += *transformed_scan_ptr; // localmap内的距离达到阈值就清空,并重新从0开始一帧一帧添加点云
-//    tmp_map += *transformed_scan_ptr; // 此处不能直接复制给电晕
-//
-//// 只是说map更新了,因此target也要更新,不要落后太多
-//// 注意:此时加入的target:map_ptr并不包括刚加入点云的transformed_scan_ptr
-//    if (_method_type == MethodType::use_pcl)
-//      pcl_ndt.setInputTarget(pc_target_);
-//    else if (_method_type == MethodType::use_cpu) {
-//      if (_incremental_voxel_update)
-//        cpu_ndt.updateVoxelGrid(transformed_scan_ptr);
-//      else
-//        cpu_ndt.setInputTarget(pc_target_);
-//    } else if (_method_type == MethodType::use_omp)
-//      omp_ndt->setInputTarget(pc_target_);
-//  }
-//
-//  // 当局部地图内的距离大于阈值,则清空localmap
-//  if (localmap_size >= max_localmap_size) {
-//    localmap = tmp_map;
-//    tmp_map.clear();
-//    localmap_size = 0.0;
-//  }
+  if (shift >= min_add_scan_shift) {
+    localmap_size += shift;
+    odom_size += shift;
 
+    // 只有在fitnessscore状态好的情况下才选取作为关键帧加入到localmap中
+    // 这里的下采样网格大小将严重影响见图效果
+    downSizeFilterKeyFrames.setInputCloud(transformed_scan_ptr);
+    downSizeFilterKeyFrames.filter(*transformed_scan_ptr);
+    localmap += *transformed_scan_ptr; // localmap内的距离达到阈值就清空,并重新从0开始一帧一帧添加点云
+    tmp_map += *transformed_scan_ptr; // 此处不能直接复制给电晕
+
+    // 只是说map更新了,因此target也要更新,不要落后太多
+    // 注意:此时加入的target:map_ptr并不包括刚加入点云的transformed_scan_ptr
+    if (_method_type == MethodType::use_pcl)
+      pcl_ndt.setInputTarget(pc_target_);
+    else if (_method_type == MethodType::use_cpu) {
+      if (_incremental_voxel_update)
+        cpu_ndt.updateVoxelGrid(transformed_scan_ptr);
+      else
+        cpu_ndt.setInputTarget(pc_target_);
+    } else if (_method_type == MethodType::use_omp)
+      omp_ndt->setInputTarget(pc_target_);
+  }
+
+  // 当局部地图内的距离大于阈值,则清空localmap
+  if (localmap_size >= max_localmap_size) {
+    localmap = tmp_map;
+    tmp_map.clear();
+    localmap_size = 0.0;
+  }
 
 // 发布关键帧位姿
   if (odom_pose_pub.getNumSubscribers() > 0) {
@@ -391,20 +376,6 @@ void LidarOdom::OdomEstimate(const pcl::PointCloud<pcl::PointXYZI>::Ptr &filtere
     pointcloud_current_ptr->header.stamp = current_scan_time;
     current_points_pub.publish(*pointcloud_current_ptr);
   }
-
-/* pcl::PointCloud<pcl::PointXYZI>::Ptr local_cloud(new pcl::PointCloud<pcl::PointXYZI>());
-pcl::copyPointCloud(localmap, *local_cloud);
-downSizeFilterLocalmap.setInputCloud(local_cloud);
-downSizeFilterLocalmap.filter(*local_cloud);
-
-if (local_map_pub.getNumSubscribers() > 0) {
-   sensor_msgs::PointCloud2::Ptr localmap_msg_ptr(new sensor_msgs::PointCloud2);
-   pcl::toROSMsg(*local_cloud, *localmap_msg_ptr);
-   localmap_msg_ptr->header.frame_id = "map";
-   localmap_msg_ptr->header.stamp = current_scan_time;
-   local_map_pub.publish(*localmap_msg_ptr);
- }
- local_cloud->clear();*/
 
   if (current_odom_pub.getNumSubscribers()) {
 
@@ -435,9 +406,6 @@ if (local_map_pub.getNumSubscribers() > 0) {
   }
 
   ros::Time test_time_6 = ros::Time::now();
-// end5
-
-
   std::cout << "*************************************************************************" << std::endl;
   std::cout << "Number of filtered scan points: " << filtered_scan_ptr->size() << " points." << std::endl;
   std::cout << "Number of localmap points: " << pc_target_->size() << " points." << std::endl;
@@ -449,10 +417,9 @@ if (local_map_pub.getNumSubscribers() > 0) {
             std::endl;
   std::cout << "scan shift: " << shift <<
             std::endl;
-//std::cout << "localmap shift: " << localmap_size << std::endl;
+  std::cout << "localmap shift: " << localmap_size << std::endl;
   std::cout << "global path: " << odom_size <<
             std::endl;
-//std::cout << "*************************************************************************" << std::endl;
 }
 
 void LidarOdom::ImuCB(const sensor_msgs::ImuConstPtr &msg) {
@@ -811,8 +778,8 @@ void LidarOdom::ExtractSurroundKeyframes() {
     for (auto keyframe : recent_keyframes_) {
       *pc_target_ += *keyframe;
     }
-//    downSizeFilterKeyFrames.setInputCloud(pc_target_);
-//    downSizeFilterKeyFrames.filter(*pc_target_);
+    downSizeFilterKeyFrames.setInputCloud(pc_target_);
+    downSizeFilterKeyFrames.filter(*pc_target_);
 
     if (_method_type == MethodType::use_pcl)
       pcl_ndt.setInputTarget(pc_target_);
@@ -837,18 +804,18 @@ void LidarOdom::ExtractSurroundKeyframesByDis() {
     return;
   }
   bool target_updated = false;
-  if (shift >= min_add_scan_shift) {
-    localmap_size += shift;
-    odom_size += shift;
+  if (shift_dis >= min_add_scan_shift) {
+    localmap_size += shift_dis;
+    odom_size += shift_dis;
     // 只有在fitnessscore状态好的情况下才选取作为关键帧加入到localmap中
     // 这里的下采样网格大小将严重影响见图效果
-    int this_key_id = cloud_keyposes_3d_->size() - 1;
-    pcl::PointCloud<PointT>::Ptr tf_cloud(new pcl::PointCloud<PointT>());
-    pcl::transformPointCloud(*cloud_keyframes_[this_key_id], *tf_cloud, cloud_keyposes_[this_key_id]);   // 当前帧转换到全局地图上
-    downSizeFilterLocalmap.setInputCloud(tf_cloud);
-    downSizeFilterLocalmap.filter(*tf_cloud);
-    localmap += *tf_cloud; // localmap内的距离达到阈值就清空,并重新从0开始一帧一帧添加点云
-    tmp_map += *tf_cloud;
+    //    int this_key_id = cloud_keyposes_3d_->size() - 1;
+    //    pcl::PointCloud<PointT>::Ptr tf_cloud(new pcl::PointCloud<PointT>());
+    //    pcl::transformPointCloud(*cloud_keyframes_[this_key_id], *tf_cloud, cloud_keyposes_[this_key_id]);   // 当前帧转换到全局地图上
+    downSizeFilterLocalmap.setInputCloud(transformed_scan_ptr);
+    downSizeFilterLocalmap.filter(*transformed_scan_ptr);
+    localmap += *transformed_scan_ptr; // localmap内的距离达到阈值就清空,并重新从0开始一帧一帧添加点云
+    tmp_map += *transformed_scan_ptr;
 
     // 只是说map更新了,因此target也要更新,不要落后太多
     // 注意:此时加入的target:map_ptr并不包括刚加入点云的transformed_scan_ptr
@@ -865,8 +832,9 @@ void LidarOdom::ExtractSurroundKeyframesByDis() {
 
     ROS_INFO("new ndt target set");
   }
-  shift = 0;
+  shift_dis = 0;
   if (localmap_size >= max_localmap_size) {
+    localmap.clear();
     localmap = tmp_map;
     tmp_map.clear();
     localmap_size = 0.0;

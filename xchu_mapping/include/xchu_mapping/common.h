@@ -4,6 +4,7 @@
 
 #ifndef SRC_XCHU_MAPPING_INCLUDE_XCHU_MAPPING_COMMON_H_
 #define SRC_XCHU_MAPPING_INCLUDE_XCHU_MAPPING_COMMON_H_
+#include <tf/transform_datatypes.h>
 
 typedef pcl::PointXYZI PointT;
 

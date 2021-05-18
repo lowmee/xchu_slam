@@ -12,7 +12,7 @@ int main(int argc, char **argv) {
   std::thread icp_calculation(&PGO::ICPRefine, &pgo); // 会还检测优化 1hz
   std::thread visualize_map(&PGO::MapVisualization, &pgo);
 
-  ros::Rate rate(20);
+  ros::Rate rate(200);
   while (ros::ok()) {
     pgo.Run();
     ros::spinOnce();
@@ -220,22 +220,8 @@ void PGO::Run() {
     if (loop_method == 1) {
       scManager.makeAndSaveScancontextAndKeys(*thisKeyFrame);
     } else if (loop_method == 2) {
-      pcl::PointCloud<pcl::PointXYZI>::Ptr pc_filtered(new pcl::PointCloud<pcl::PointXYZI>());
-      iscGeneration.ground_filter(thisKeyFrame, pc_filtered); // 对z高度进行截取，粗略的去除地面
-      ISCDescriptor desc = iscGeneration.calculate_isc(pc_filtered); // 计算非地面点云的sc特征
-      Eigen::Vector3d current_t(pose_curr.x, pose_curr.y, pose_curr.z); // 当前odom位置
+      iscGeneration.makeAndSavedec(thisKeyFrame, point);
 
-      //dont change push_back sequence
-      if (iscGeneration.travel_distance_arr.size() == 0) {
-        iscGeneration.travel_distance_arr.push_back(0);
-      } else {
-        // 这里是计算里程距离？
-        double dis_temp = iscGeneration.travel_distance_arr.back()
-            + std::sqrt((iscGeneration.pos_arr.back() - current_t).array().square().sum());
-        iscGeneration.travel_distance_arr.push_back(dis_temp);
-      }
-      iscGeneration.pos_arr.push_back(current_t); // odom装到这里
-      iscGeneration.isc_arr.push_back(desc); // isc特征全部装到这里面
       // 发布isc图像
       cv_bridge::CvImage out_msg;
       out_msg.header.frame_id = "camera_init";
@@ -329,29 +315,7 @@ void PGO::PerformSCLoopClosure() {
   if (keyframePoses.size() < 30) // do not try too early
     return;
 
-  if (loop_method == 1) {
-    auto detectResult = scManager.detectLoopClosureID(); // first: nn index, second: yaw diff
-    int SCclosestHistoryFrameID = detectResult.first;
-    if (SCclosestHistoryFrameID != -1) {
-      const int prev_node_idx = SCclosestHistoryFrameID;
-      const int curr_node_idx = keyframePoses.size() - 1; // because cpp starts 0 and ends n-1
-      ROS_WARN("Loop detected! - between %d and %d", prev_node_idx, curr_node_idx);
-
-      double
-          distance = sqrt(std::pow((keyframePosesUpdated[prev_node_idx].x - keyframePosesUpdated[curr_node_idx].x), 2) +
-          std::pow((keyframePosesUpdated[prev_node_idx].y - keyframePosesUpdated[curr_node_idx].y), 2));
-      std::cout << "distance: " << distance << std::endl;
-
-      if (distance > 20.0) {
-        ROS_ERROR("BAD SC RESULT..");
-      } else {
-        mutex_.lock();
-        loop_queue_.push(std::pair<int, int>(prev_node_idx, curr_node_idx));
-        // addding actual 6D constraints in the other thread, icp refine.
-        mutex_.unlock();
-      }
-    }
-  } else if (loop_method == 0) {
+  if (loop_method == 0) {
     // 寻找最近的pose
     int curr_node_idx = keyframePosesUpdated.size() - 1;
 
@@ -391,59 +355,55 @@ void PGO::PerformSCLoopClosure() {
         ROS_ERROR("BAD detection RESULT..");
       }
     }
-  } else if (loop_method == 2) {
-    // 使用ISC
-    int curr_node_idx = keyframePosesUpdated.size() - 1;
-
-    //search for the near neibourgh pos
-    int prev_node_idx = 0;
-    double best_score = 0.0;
-    for (int i = 0; i < keyframePosesUpdated.size(); i++) { // 遍历之前点云帧的isc特征
-      double delta_travel_distance =
-          iscGeneration.travel_distance_arr.back() - iscGeneration.travel_distance_arr[i]; // 先检测是否存在距离最近的帧
-      double pos_distance =
-          std::sqrt((iscGeneration.pos_arr[i] - iscGeneration.pos_arr.back()).array().square().sum());  // 两帧空间距离
-      // 我们认为里程距离越大，空间距离越小，越可能是回环
-      if (delta_travel_distance > SKIP_NEIBOUR_DISTANCE
-          && pos_distance < delta_travel_distance * INFLATION_COVARIANCE) {
-        double geo_score = 0;
-        double inten_score = 0;
-        if (iscGeneration.is_loop_pair(iscGeneration.isc_arr[curr_node_idx],
-                                       iscGeneration.isc_arr[i],
-                                       geo_score,
-                                       inten_score)) { // 计算isc的几何以及强度得分
-          if (geo_score + inten_score > best_score) {  // 如果得分满足阈值，则认为是回环位置
-            best_score = geo_score + inten_score;
-            prev_node_idx = i;
-          }
-        }
-
-      }
-    }
-    if (prev_node_idx != 0) {
-      //matched_frame_id.push_back(best_matched_id);
-      ROS_WARN("received loop closure candidate: current: %d, history %d, total_score %f",
-               curr_node_idx,
-               prev_node_idx,
-               best_score);
+  } else if (loop_method == 1) {
+    auto detectResult = scManager.detectLoopClosureID(); // first: nn index, second: yaw diff
+    int SCclosestHistoryFrameID = detectResult.first;
+    if (SCclosestHistoryFrameID != -1) {
+      const int prev_node_idx = SCclosestHistoryFrameID;
+      const int curr_node_idx = keyframePoses.size() - 1; // because cpp starts 0 and ends n-1
+      ROS_WARN("Loop detected! - between %d and %d", prev_node_idx, curr_node_idx);
 
       double
           distance = sqrt(std::pow((keyframePosesUpdated[prev_node_idx].x - keyframePosesUpdated[curr_node_idx].x), 2) +
           std::pow((keyframePosesUpdated[prev_node_idx].y - keyframePosesUpdated[curr_node_idx].y), 2));
       std::cout << "distance: " << distance << std::endl;
-      if (distance < 20) {
+
+      if (distance > 20.0) {
+        ROS_ERROR("BAD SC RESULT..");
+      } else {
         mutex_.lock();
         loop_queue_.push(std::pair<int, int>(prev_node_idx, curr_node_idx));
         mutex_.unlock();
-      } else {
-        ROS_ERROR("bad isc result");
       }
     }
+  } else if (loop_method == 2) {
+    // 使用ISC
+    auto detectResult = iscGeneration.detectLoopClosureID(); // first: nn index, second: yaw diff
+    int SCclosestHistoryFrameID = detectResult.first;
+    if (SCclosestHistoryFrameID != -1) {
+      const int prev_node_idx = SCclosestHistoryFrameID;
+      const int curr_node_idx = keyframePoses.size() - 1; // because cpp starts 0 and ends n-1
+      ROS_WARN("Loop detected! - between %d and %d", prev_node_idx, curr_node_idx);
+
+      double
+          distance = sqrt(std::pow((keyframePosesUpdated[prev_node_idx].x - keyframePosesUpdated[curr_node_idx].x), 2) +
+          std::pow((keyframePosesUpdated[prev_node_idx].y - keyframePosesUpdated[curr_node_idx].y), 2));
+      std::cout << "distance: " << distance << std::endl;
+
+      if (distance > 20.0) {
+        ROS_ERROR("BAD ISC RESULT..");
+      } else {
+        mutex_.lock();
+        loop_queue_.push(std::pair<int, int>(prev_node_idx, curr_node_idx));
+        mutex_.unlock();
+      }
+    }
+
   }
 }
 
 void PGO::LoopClosure() {
-  ros::Rate rate(2.0);
+  ros::Rate rate(1.0);
   while (ros::ok()) {
     rate.sleep();
     PerformSCLoopClosure();

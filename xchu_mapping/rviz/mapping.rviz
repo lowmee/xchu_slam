@@ -6,7 +6,7 @@ Panels:
       Expanded:
         - /Global Options1
         - /Status1
-        - /lidar_odom1
+        - /global_map1
         - /lidar_odom1/Shape1
         - /lidar_odom1/Covariance1/Position1
         - /lidar_odom1/Covariance1/Orientation1
@@ -76,61 +76,19 @@ Visualization Manager:
       Value: false
       Visual Enabled: true
     - Class: rviz/TF
-      Enabled: true
+      Enabled: false
       Frame Timeout: 15
       Frames:
         All Enabled: true
-        aft_mapped:
-          Value: true
-        base_link:
-          Value: true
-        camera_color_left:
-          Value: true
-        camera_color_right:
-          Value: true
-        camera_gray_left:
-          Value: true
-        camera_gray_right:
-          Value: true
-        camera_init:
-          Value: true
-        imu_init:
-          Value: true
-        imu_link:
-          Value: true
-        velo_init:
-          Value: true
-        velo_link:
-          Value: true
-        world:
-          Value: true
       Marker Scale: 5
       Name: TF
       Show Arrows: true
       Show Axes: true
       Show Names: true
       Tree:
-        world:
-          base_link:
-            imu_link:
-              camera_color_left:
-                {}
-              camera_color_right:
-                {}
-              camera_gray_left:
-                {}
-              camera_gray_right:
-                {}
-              velo_link:
-                {}
-          imu_init:
-            camera_init:
-              aft_mapped:
-                {}
-            velo_init:
-              {}
+        {}
       Update Interval: 0
-      Value: true
+      Value: false
     - Alpha: 0.20000000298023224
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -194,19 +152,19 @@ Visualization Manager:
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
-        Max Value: 2.95536732673645
-        Min Value: -18.315866470336914
+        Max Value: 2.185190200805664
+        Min Value: -9.340535163879395
         Value: true
       Axis: Z
       Channel Name: intensity
       Class: rviz/PointCloud2
       Color: 255; 0; 0
-      Color Transformer: Intensity
+      Color Transformer: AxisColor
       Decay Time: 0
       Enabled: true
       Invert Rainbow: false
       Max Color: 255; 255; 255
-      Max Intensity: 0.9900000095367432
+      Max Intensity: 0.6549999713897705
       Min Color: 0; 0; 0
       Min Intensity: 0
       Name: current_points
@@ -286,7 +244,7 @@ Visualization Manager:
       Unreliable: true
       Value: true
     - Class: rviz/Image
-      Enabled: false
+      Enabled: true
       Image Topic: /kitti/camera_color_left/image
       Max Value: 1
       Median window: 5
@@ -296,7 +254,7 @@ Visualization Manager:
       Queue Size: 2
       Transport Hint: raw
       Unreliable: false
-      Value: false
+      Value: true
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -328,7 +286,7 @@ Visualization Manager:
       Use rainbow: true
       Value: false
     - Class: rviz/Image
-      Enabled: true
+      Enabled: false
       Image Topic: /kitti/camera_color_right/image
       Max Value: 1
       Median window: 5
@@ -338,7 +296,7 @@ Visualization Manager:
       Queue Size: 2
       Transport Hint: raw
       Unreliable: false
-      Value: true
+      Value: false
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -499,6 +457,7 @@ Visualization Manager:
       Name: pose_graph
       Namespaces:
         edges: true
+        loop: true
         nodes: true
       Queue Size: 100
       Value: true
@@ -542,25 +501,25 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/ThirdPersonFollower
-      Distance: 89.48414611816406
+      Distance: 317.2886657714844
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
         Swap Stereo Eyes: false
         Value: false
       Focal Point:
-        X: 35.19963455200195
-        Y: 14.014208793640137
-        Z: 2.9026630727457814e-5
+        X: 98.11113739013672
+        Y: -81.92362213134766
+        Z: 4.965504558640532e-5
       Focal Shape Fixed Size: false
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.544796347618103
+      Pitch: 1.5697963237762451
       Target Frame: camera_init
       Value: ThirdPersonFollower (rviz)
-      Yaw: 1.2853925228118896
+      Yaw: 2.4803953170776367
     Saved: ~
 Window Geometry:
   Displays:

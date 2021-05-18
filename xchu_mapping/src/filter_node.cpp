@@ -10,7 +10,7 @@ int main(int argc, char **argv) {
   ROS_INFO("\033[1;32m---->\033[0m XCHU Filter Node Started.");
 
   CloudFilter filter;
-  ros::Rate rate(20);
+  ros::Rate rate(200);
   while (ros::ok()) {
     filter.Run();
     ros::spinOnce();
@@ -20,7 +20,7 @@ int main(int argc, char **argv) {
 }
 
 CloudFilter::CloudFilter() : nh("~") {
-  downSizeFilterKeyFrames.setLeafSize(0.5, 0.5, 0.5); // 发布全局地图的采样size,设置小了导致系统卡顿
+  downSizeFilterKeyFrames.setLeafSize(0.4, 0.4, 0.4); // 发布全局地图的采样size,设置小了导致系统卡顿
   downSizeGroundFrames.setLeafSize(0.8, 0.8, 0.8);
   downSizeNoGroundFrames.setLeafSize(0.2, 0.2, 0.2);
 

@@ -18,7 +18,7 @@
 
   2.基于scan context的回环检测。
   
-  3.基于Intensity scan context的回环检测。（目前不稳定，可能崩掉）
+  3.基于Intensity scan context的回环检测。
   
   下图中，蓝色表示因子图中的位姿节点，红色线段表示回环约束边，绿色线段表示里程计相对位姿约束。
   

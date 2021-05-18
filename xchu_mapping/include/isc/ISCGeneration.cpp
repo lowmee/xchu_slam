@@ -104,9 +104,8 @@ ISCDescriptor ISCGeneration::getLastISCRGB(void) {
   return isc_color;
 }
 
-/*
 void ISCGeneration::loopDetection(const pcl::PointCloud<pcl::PointXYZI>::Ptr &current_pc,
-                                       Eigen::Isometry3d &odom) {
+                                  Eigen::Isometry3d &odom) {
 
   pcl::PointCloud<pcl::PointXYZI>::Ptr pc_filtered(new pcl::PointCloud<pcl::PointXYZI>());
   ground_filter(current_pc, pc_filtered); // 对z高度进行截取，粗略的去除地面
@@ -154,12 +153,70 @@ void ISCGeneration::loopDetection(const pcl::PointCloud<pcl::PointXYZI>::Ptr &cu
   }
 
 }
-*/
+
+std::pair<int, float> ISCGeneration::detectLoopClosureID() {
+
+  int curr_node_idx = pos_arr.size() - 1;
+
+  //search for the near neibourgh pos
+  int prev_node_idx = 0;
+  double best_score = 0.0;
+  for (int i = 0; i < pos_arr.size(); i++) { // 遍历之前点云帧的isc特征
+    double delta_travel_distance = travel_distance_arr.back() - travel_distance_arr[i]; // 先检测是否存在距离最近的帧
+    double pos_distance = std::sqrt((pos_arr[i] - pos_arr.back()).array().square().sum());  // 两帧空间距离
+    // 我们认为里程距离越大，空间距离越小，越可能是回环
+    if (delta_travel_distance > SKIP_NEIBOUR_DISTANCE
+        && pos_distance < delta_travel_distance * INFLATION_COVARIANCE) {
+      double geo_score = 0;
+      double inten_score = 0;
+      if (is_loop_pair(isc_arr[curr_node_idx],
+                       isc_arr[i],
+                       geo_score,
+                       inten_score)) { // 计算isc的几何以及强度得分
+        if (geo_score + inten_score > best_score) {  // 如果得分满足阈值，则认为是回环位置
+          best_score = geo_score + inten_score;
+          prev_node_idx = i;
+        }
+      }
+    }
+  }
+  std::pair<int, float> result{-1, 0.0};
+  if (prev_node_idx != 0) {
+    ROS_WARN("received loop closure candidate: current: %d, history %d, total_score %f",
+             curr_node_idx,
+             prev_node_idx,
+             best_score);
+      result = {prev_node_idx, curr_node_idx};
+  }
+
+  return result;
+}
+
+void ISCGeneration::makeAndSavedec(const pcl::PointCloud<pcl::PointXYZI>::Ptr &current_pc,
+                                   pcl::PointXYZI &pose_curr) {
+
+  pcl::PointCloud<pcl::PointXYZI>::Ptr pc_filtered(new pcl::PointCloud<pcl::PointXYZI>());
+  ground_filter(current_pc, pc_filtered); // 对z高度进行截取，粗略的去除地面
+  ISCDescriptor desc = calculate_isc(pc_filtered); // 计算非地面点云的sc特征
+  Eigen::Vector3d current_t(pose_curr.x, pose_curr.y, pose_curr.z); // 当前odom位置
+
+  //dont change push_back sequence
+  if (travel_distance_arr.size() == 0) {
+    travel_distance_arr.push_back(0);
+  } else {
+    // 这里是计算里程距离？
+    double dis_temp = travel_distance_arr.back()
+        + std::sqrt((pos_arr.back() - current_t).array().square().sum());
+    travel_distance_arr.push_back(dis_temp);
+  }
+  pos_arr.push_back(current_t); // odom装到这里
+  isc_arr.push_back(desc); // isc特征全部装到这里面
+}
 
 bool ISCGeneration::is_loop_pair(ISCDescriptor &desc1,
-                                      ISCDescriptor &desc2,
-                                      double &geo_score,
-                                      double &inten_score) {
+                                 ISCDescriptor &desc2,
+                                 double &geo_score,
+                                 double &inten_score) {
   int angle = 0;
   geo_score = calculate_geometry_dis(desc1, desc2, angle); // 计算几何距离
   if (geo_score > GEOMETRY_THRESHOLD) {
@@ -225,7 +282,7 @@ double ISCGeneration::calculate_intensity_dis(const ISCDescriptor &desc1, const 
   return 1 - difference;
 }
 void ISCGeneration::ground_filter(const pcl::PointCloud<pcl::PointXYZI>::Ptr &pc_in,
-                                       pcl::PointCloud<pcl::PointXYZI>::Ptr &pc_out) {
+                                  pcl::PointCloud<pcl::PointXYZI>::Ptr &pc_out) {
   pcl::PassThrough<pcl::PointXYZI> pass;
   pass.setInputCloud(pc_in);
   pass.setFilterFieldName("z");

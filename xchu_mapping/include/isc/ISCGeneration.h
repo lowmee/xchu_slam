@@ -53,7 +53,9 @@ class ISCGeneration
 
   ISCDescriptor getLastISCMONO(void);
   ISCDescriptor getLastISCRGB(void);
-//  void loopDetection(const pcl::PointCloud<pcl::PointXYZI>::Ptr& current_pc, Eigen::Isometry3d& odom);
+  void loopDetection(const pcl::PointCloud<pcl::PointXYZI>::Ptr& current_pc, Eigen::Isometry3d& odom);
+  void makeAndSavedec(const pcl::PointCloud<pcl::PointXYZI>::Ptr& current_pc, pcl::PointXYZI &pose);
+  std::pair<int, float>  detectLoopClosureID();
 
   void init_color(void);
   void print_param(void);

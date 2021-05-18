@@ -105,7 +105,7 @@ class LidarOdom {
   int submap_num = 0;
   double localmap_size = 0.0;
   double max_localmap_size, odom_size;
-  double shift = 0.0;
+  double shift_dis = 0.0;
 
   double _tf_x, _tf_y, _tf_z, _tf_roll, _tf_pitch, _tf_yaw;
   Eigen::Matrix4f tf_b2l, tf_l2b;
