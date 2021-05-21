@@ -1,8 +1,15 @@
-/*
- Created by xchu on 2021/4/13.
-*/
-
-
+/**
+ * @file filter_node.cpp
+ * @author XCHU (2022087641@qq.com)
+ * @brief  此部分主要做点云过滤的地面分割，其中地面分割采用基本的法向量过滤和ransanc拟合，ax+by+cz+d=0,
+           地面参数a b cd直接通过msg发布出来，方便后续使用。
+           代码比较简单，直接copy的hdl graph slam
+ * @version 1.0
+ * @date 2020-09-20
+ *
+ * @copyright Copyright (c) 2020
+ *
+ */
 #include "xchu_mapping/filter_node.h"
 
 int main(int argc, char **argv) {
@@ -20,12 +27,15 @@ int main(int argc, char **argv) {
 }
 
 CloudFilter::CloudFilter() : nh("~") {
-  downSizeFilterKeyFrames.setLeafSize(0.4, 0.4, 0.4); // 发布全局地图的采样size,设置小了导致系统卡顿
+
+  nh.param<std::string>("cloud_topic", cloud_topic_, "/kitti/velo/pointcloud");
+
+  double filter_size = 0.5;
+  downSizeFilterKeyFrames.setLeafSize(filter_size, filter_size, filter_size); // 发布全局地图的采样size,设置小了导致系统卡顿
   downSizeGroundFrames.setLeafSize(0.8, 0.8, 0.8);
   downSizeNoGroundFrames.setLeafSize(0.2, 0.2, 0.2);
 
-  // 订阅odom节点见图
-  lidar_sub = nh.subscribe<sensor_msgs::PointCloud2>("/kitti/velo/pointcloud", 10, &CloudFilter::PcCB, this);
+  lidar_sub = nh.subscribe<sensor_msgs::PointCloud2>(cloud_topic_, 10, &CloudFilter::PcCB, this);
 
   points_pub = nh.advertise<sensor_msgs::PointCloud2>("/filtered_points", 10);
   final_ground_pub = nh.advertise<sensor_msgs::PointCloud2>("/ground_points", 32);
@@ -125,7 +135,7 @@ Eigen::Vector4f CloudFilter::DetectPlane(const pcl::PointCloud<PointT>::Ptr &clo
 
     sensor_msgs::PointCloud2::Ptr temp_cloud_ptr(new sensor_msgs::PointCloud2);
     pcl::toROSMsg(*output_cloud, *temp_cloud_ptr);
-    temp_cloud_ptr->header.frame_id = "/camera_init";
+    temp_cloud_ptr->header.frame_id = "/velo_link";
     temp_cloud_ptr->header.stamp = current_header.stamp;
     normal_ground_pub.publish(temp_cloud_ptr);
   }
@@ -177,7 +187,7 @@ Eigen::Vector4f CloudFilter::DetectPlane(const pcl::PointCloud<PointT>::Ptr &clo
     sensor_msgs::PointCloud2::Ptr temp_cloud_ptr(new sensor_msgs::PointCloud2);
     pcl::toROSMsg(*output_cloud, *temp_cloud_ptr);
     temp_cloud_ptr->header.stamp = current_header.stamp;
-    temp_cloud_ptr->header.frame_id = "/camera_init";
+    temp_cloud_ptr->header.frame_id = "/velo_link";
     temp_cloud_ptr->header.stamp = current_header.stamp;
     final_ground_pub.publish(temp_cloud_ptr);
   }
@@ -198,7 +208,7 @@ Eigen::Vector4f CloudFilter::DetectPlane(const pcl::PointCloud<PointT>::Ptr &clo
     sensor_msgs::PointCloud2::Ptr temp_cloud_ptr(new sensor_msgs::PointCloud2);
     pcl::toROSMsg(*output_cloud, *temp_cloud_ptr);
     temp_cloud_ptr->header.stamp = current_header.stamp;
-    temp_cloud_ptr->header.frame_id = "/camera_init";
+    temp_cloud_ptr->header.frame_id = "/velo_link";
     non_points_pub.publish(temp_cloud_ptr);
   }
 
@@ -272,7 +282,7 @@ void CloudFilter::Run() {
     xchu_mapping::FloorCoeffs coeffs;
     // coeffs.header = cloud_header;
     coeffs.header.stamp = pointcloud_time;
-    coeffs.header.frame_id = "/camera_init";
+    coeffs.header.frame_id = "/velo_link";
     if (floor != Eigen::Vector4f::Identity()) {
       coeffs.coeffs.resize(4);
       for (int i = 0; i < 4; i++) {
@@ -287,7 +297,7 @@ void CloudFilter::Run() {
       sensor_msgs::PointCloud2::Ptr pointcloud_current_ptr(new sensor_msgs::PointCloud2);
       pcl::toROSMsg(*sor_scan_ptr, *pointcloud_current_ptr);
       pointcloud_current_ptr->header.stamp = pointcloud_time;
-      pointcloud_current_ptr->header.frame_id = "/camera_init";
+      pointcloud_current_ptr->header.frame_id = "/velo_link";
       points_pub.publish(*pointcloud_current_ptr);
     }
   }

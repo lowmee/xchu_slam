@@ -4,15 +4,19 @@
 
 ## Introduction
 
-- 里程计：基于NDT的里程计，利用imu、编码器来优化初始位姿估计，基于匀速运动模型，当同时使用编码器和imu时，选取imu的姿态和编码器的速度信息。
+![image-20210522035242361](README/image-20210522035242361.png)
+
+- filter_node：点云下采样，离群点去除，地面分割（法向量过滤+ransanc）。此部分代码简单，直接copy的hdl graph slam.
+
+- odom_node：基于NDT的里程计，速度极快，匹配算法可选择ndt_omp、autoware_ndt、pcl_ndt等，可开启imu作为预测初值，imu频率过低，实际意义不大，同时未做点云去畸变处理，因为测试的kitti数据已去过畸变，但此步骤在实际建图中非常影响精度。
 
 - 局部地图：采用两种策略的localmap, 实测方法2效果更好
   1.基于关键帧数量选取, 关键帧数量够则滑窗更新, 去除旧的加入新的
   2.基于距离选取关键帧, 基于localmap距离阈值刷新, 每个周期内localmap关键帧数量从1开始增加
 
-- 后端优化：取协方差较小的GPS位置加入因子图中（暂不可用）。
+- pgo_node：参考SC-LEGO LOAM，取协方差较小的GPS位置加入因子图中（暂不可用）。
 
-- 回环检测：三种方法，
+- 回环检测：三种方法，2中存在误检和漏检情况，3表示一般，对于建图精度未有太大提升，但漏检的情况要少很多。
 
   1.传统的邻域距离搜索+ICP匹配。
 
@@ -40,7 +44,7 @@
 roslaunch xchu_mapping  xchu_mapping.launch 
 ```
 
-2. Play   kitti 00 bag, bag包播放时请1倍速，因为是SLAM系统，在bag包播放完成后，节点将暂停，可能出现bag包播完了，但里程计还未跑完的情况。
+2. 测试数据采用kitti 00 序列，播放bag包时请1倍速，因为是SLAM系统，在bag包播放完成后，节点将暂停，可能出现bag包播完了，但里程计还未跑完的情况。
 
 ```shell
 rosbag play kitti_2011_10_03_drive_0027_synced.bag --clock
@@ -52,7 +56,7 @@ rosbag play kitti_2011_10_03_drive_0027_synced.bag --clock
 
 ### 性能及实验
 
-在KITTI 01上序列上进行测试，需要将ground truth拷贝到文件夹下，安装evo工具，并将KITTI gt转换为TUM格式。
+在KITTI 00上序列上进行测试，需要将ground truth拷贝到文件夹下，安装evo工具，并将KITTI gt转换为TUM格式。在PCD文件夹下已经给出了本人的默认配置的实验结果，可以直接跑。
 
 - APE评估，RMSE=1.61m
 

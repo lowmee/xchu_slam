@@ -1,5 +1,6 @@
 //
 // Created by xchu on 2021/5/12.
+// 这里的代码框架主要参考SC LEGO LOAM
 //
 #include "xchu_mapping/pgo.h"
 
@@ -8,8 +9,8 @@ int main(int argc, char **argv) {
   ROS_INFO("\033[1;32m---->\033[0m XCHU PGO Node Started.");
 
   PGO pgo;
-  std::thread loop_detection(&PGO::LoopClosure, &pgo); // 会换检测 2hz
-  std::thread icp_calculation(&PGO::ICPRefine, &pgo); // 会还检测优化 1hz
+  std::thread loop_detection(&PGO::LoopClosure, &pgo); // 回环检测 2hz
+  std::thread icp_calculation(&PGO::ICPRefine, &pgo); // 优化 1hz
   std::thread visualize_map(&PGO::MapVisualization, &pgo);
 
   ros::Rate rate(200);
@@ -29,28 +30,34 @@ int main(int argc, char **argv) {
 PGO::PGO() : nh("~") {
   InitParams();
 
+  // 换里程计的时候在这里换掉odom和point cloud的topic即可
   points_sub = nh.subscribe<sensor_msgs::PointCloud2>("/filtered_points", 100, &PGO::PcCB, this);
-  odom_sub = nh.subscribe<nav_msgs::Odometry>("/laser_odom_to_init", 100, &PGO::OdomCB, this);
-//  odom_sub = nh.subscribe<nav_msgs::Odometry>("/aft_mapped_to_init", 100, &PGO::OdomCB, this);
+  odom_sub = nh.subscribe<nav_msgs::Odometry>(odom_topic_.c_str(), 100, &PGO::OdomCB, this);
+  // gps暂不可用
   gps_sub = nh.subscribe<sensor_msgs::NavSatFix>("/kitti/oxts/gps/fix", 100, &PGO::GpsCB, this);
 
   // odom_pose_pub = nh.advertise<sensor_msgs::PointCloud2>("/odom_poses", 10);
-  final_odom_pub = nh.advertise<nav_msgs::Odometry>("/final_odom", 100);
+  // final_odom_pub = nh.advertise<nav_msgs::Odometry>("/final_odom", 100);
   map_pub = nh.advertise<sensor_msgs::PointCloud2>("/global_map", 100);
-  pose_pub = nh.advertise<sensor_msgs::PointCloud2>("/key_poses", 1);  // key pose
+  pose_pub = nh.advertise<sensor_msgs::PointCloud2>("/key_poses", 10);  // key pose
   markers_pub = nh.advertise<visualization_msgs::MarkerArray>("/markers", 16);
-  isc_pub = nh.advertise<sensor_msgs::Image>("/isc", 100);
+  if (loop_method == 2)
+    isc_pub = nh.advertise<sensor_msgs::Image>("/isc", 100);
 }
 
 void PGO::InitParams() {
   nh.param<std::string>("save_dir_", save_dir_, "/home/xchu/workspace/xchujwu_slam/src/xchu_mapping/pcd/");
-  nh.param<int>("loop_method", loop_method, 2);
+  nh.param<std::string>("odom_topic", odom_topic_, "laser_odom_to_init");
+  nh.param<int>("loop_method", loop_method, 1);
 
-  keyframeMeterGap = 2.0;// pose assignment every k frames
+  // 每隔2m选取关键帧
+  keyframeMeterGap = 2.0;
 
-  scDistThres = 0.2;// pose assignment every k frames
+  // scan contetx的阈值和参数配置
+  scDistThres = 0.2;
   scManager.setSCdistThres(scDistThres);
 
+  // intensity scan context参数配置
   int sector_width = 60;
   int ring_height = 60;
   double max_dis = 40.0;
@@ -63,11 +70,11 @@ void PGO::InitParams() {
   keyframePoints.reset(new pcl::PointCloud<PointT>());
   kdtreeHistoryKeyPoses.reset(new pcl::KdTreeFLANN<PointT>());
 
-  float filter_size = 0.5;
+  //float filter_size = 0.5;
   downSizeFilterScancontext.setLeafSize(filter_size, filter_size, filter_size);
   downSizeFilterICP.setLeafSize(filter_size, filter_size, filter_size);
-  downSizePublishCloud.setLeafSize(0.5, 0.5, 0.5);
-  downSizeFilterMapPGO.setLeafSize(0.5, 0.5, 0.5);
+  downSizePublishCloud.setLeafSize(filter_size, filter_size, filter_size);
+  downSizeFilterMapPGO.setLeafSize(filter_size, filter_size, filter_size);
 
   // gtsam params
   ISAM2Params parameters;
@@ -75,7 +82,7 @@ void PGO::InitParams() {
   parameters.relinearizeSkip = 1;
   isam = new ISAM2(parameters);
 
-  // priorNoise
+  // priorNoise, 这里里程计和先验噪声一般非常小，表明可靠
   gtsam::Vector priorNoiseVector6(6);
   priorNoiseVector6 << 1e-12, 1e-12, 1e-12, 1e-12, 1e-12, 1e-12;
   priorNoise = noiseModel::Diagonal::Variances(priorNoiseVector6);
@@ -86,7 +93,7 @@ void PGO::InitParams() {
   odomNoise = noiseModel::Diagonal::Variances(odomNoiseVector6);
 
   // loop factor noise
-  double loopNoiseScore = 0.3; // constant is ok...
+  double loopNoiseScore = 0.3;
   gtsam::Vector robustNoiseVector6(6);
   robustNoiseVector6 << loopNoiseScore, loopNoiseScore, loopNoiseScore, loopNoiseScore, loopNoiseScore, loopNoiseScore;
   robustLoopNoise = gtsam::noiseModel::Robust::Create(
@@ -108,6 +115,9 @@ void PGO::OdomCB(const nav_msgs::Odometry::ConstPtr &msg) {
   mutex_.lock();
   odom_queue_.push(msg);
   mutex_.unlock();
+
+  // originOdom主要存储里程计的原始pose,避免到odom_node中记录实验结果，更好的解耦。
+  originOdom.push_back(msg);
 }
 
 void PGO::PcCB(const sensor_msgs::PointCloud2ConstPtr &_laserCloudFullRes) {
@@ -129,10 +139,8 @@ void PGO::Run() {
     mutex_.lock();
     double time2 = odom_queue_.front()->header.stamp.toSec();
     double time3 = cloud_queue_.front()->header.stamp.toSec();
-    if (!init_time) {
-      time_stamp_ = time3;
-      init_time = true;
-    }
+
+    // align timestamp
     if (!odom_queue_.empty() && (time2 < time3 - 0.5 * 0.1)) {
       ROS_WARN("time stamp unaligned error and odometry discarded, pls check your data -->  optimization");
       odom_queue_.pop();
@@ -144,6 +152,11 @@ void PGO::Run() {
       cloud_queue_.pop();
       mutex_.unlock();
       return;
+    }
+    if (!init_time) {
+      // 主要是为了将实验结果转tum格式，需要记录第一帧的时间戳
+      time_stamp_ = time3;
+      init_time = true;
     }
     curr_odom_time_ = (cloud_queue_.front())->header.stamp.toSec();
 
@@ -167,6 +180,7 @@ void PGO::Run() {
       }
       gps_queue_.pop();
     }
+
     cloud_queue_.pop();
     odom_queue_.pop();
     mutex_.unlock();
@@ -179,10 +193,10 @@ void PGO::Run() {
                                              + std::pow((odom_pose_prev.z - odom_pose_curr.z), 2));
     movementAccumulation += delta_translation;
 
-    // 太近的舍弃
+    // 太近的点云帧舍弃，否则位子图太大，速度慢
     if (movementAccumulation > keyframeMeterGap) {
       isNowKeyFrame = true;
-      movementAccumulation = 0.0; // reset
+      movementAccumulation = 0.0;
     } else {
       isNowKeyFrame = false;
     }
@@ -211,20 +225,21 @@ void PGO::Run() {
     point.z = pose_curr.z;
     keyframePoints->points.push_back(point);
     point.z = 0;
+    // keyposes_cloud_主要是里程计的xy坐标，回环检测搜索临近历史帧的时候距离不考虑z的维度
     keyposes_cloud_->points.push_back(point);
 
     laserCloudMapPGORedraw = true;
     mKF.unlock();
 
-    // use sc detector
     if (loop_method == 1) {
+      // use sc detector
       scManager.makeAndSaveScancontextAndKeys(*thisKeyFrame);
     } else if (loop_method == 2) {
+      // use isc detector
       iscGeneration.makeAndSavedec(thisKeyFrame, point);
-
       // 发布isc图像
       cv_bridge::CvImage out_msg;
-      out_msg.header.frame_id = "camera_init";
+      out_msg.header.frame_id = "map";
       out_msg.header.stamp = ros::Time().fromSec(curr_odom_time_);
       out_msg.encoding = sensor_msgs::image_encodings::RGB8;
       out_msg.image = iscGeneration.getLastISCRGB();
@@ -274,36 +289,6 @@ void PGO::Run() {
         ISAM2Update();
       }
       mutex_pg_.unlock();
-
-      // publish odom
-      nav_msgs::Odometry odomAftPGOthis;
-      odomAftPGOthis.header.frame_id = "camera_init";
-      odomAftPGOthis.child_frame_id = "aft_mapped";
-      odomAftPGOthis.header.stamp = ros::Time().fromSec(curr_odom_time_);
-      odomAftPGOthis.pose.pose.position.x = keyframePosesUpdated.front().x;
-      odomAftPGOthis.pose.pose.position.y = keyframePosesUpdated.front().y;
-      odomAftPGOthis.pose.pose.position.z = keyframePosesUpdated.front().z;
-      odomAftPGOthis.pose.pose.orientation =
-          tf::createQuaternionMsgFromRollPitchYaw(keyframePosesUpdated.front().roll,
-                                                  keyframePosesUpdated.front().pitch,
-                                                  keyframePosesUpdated.front().yaw);
-      final_odom_pub.publish(odomAftPGOthis); // last pose
-
-
-      // tf
-      static tf::TransformBroadcaster br;
-      tf::Transform transform;
-      tf::Quaternion q;
-      transform.setOrigin(tf::Vector3(odomAftPGOthis.pose.pose.position.x,
-                                      odomAftPGOthis.pose.pose.position.y,
-                                      odomAftPGOthis.pose.pose.position.z));
-      q.setW(odomAftPGOthis.pose.pose.orientation.w);
-      q.setX(odomAftPGOthis.pose.pose.orientation.x);
-      q.setY(odomAftPGOthis.pose.pose.orientation.y);
-      q.setZ(odomAftPGOthis.pose.pose.orientation.z);
-      transform.setRotation(q);
-      br.sendTransform(tf::StampedTransform(transform, odomAftPGOthis.header.stamp, "camera_init", "aft_mapped"));
-
       // 100真输出一次node数量
       if (curr_node_idx % 100 == 0)
         cout << "posegraph odom node " << curr_node_idx << " added." << endl;
@@ -312,7 +297,7 @@ void PGO::Run() {
 }
 
 void PGO::PerformSCLoopClosure() {
-  if (keyframePoses.size() < 30) // do not try too early
+  if (keyframePoses.size() < 30)
     return;
 
   if (loop_method == 0) {
@@ -403,7 +388,7 @@ void PGO::PerformSCLoopClosure() {
 }
 
 void PGO::LoopClosure() {
-  ros::Rate rate(1.0);
+  ros::Rate rate(2.0);
   while (ros::ok()) {
     rate.sleep();
     PerformSCLoopClosure();
@@ -472,11 +457,13 @@ void PGO::ICPRefine() {
           gtsam::noiseModel::Diagonal::Variances(robustNoiseVector6));
 
       // Get pose transformation
-      float x, y, z, roll, pitch, yaw;
-      Eigen::Affine3f correctionLidarFrame;
-      correctionLidarFrame = icp.getFinalTransformation();
-      pcl::getTranslationAndEulerAngles(correctionLidarFrame, x, y, z, roll, pitch, yaw);
-      gtsam::Pose3 poseFrom = Pose3(Rot3::RzRyRx(roll, pitch, yaw), Point3(x, y, z));
+      //      float x, y, z, roll, pitch, yaw;
+      //      Eigen::Affine3f correctionLidarFrame;
+      //      correctionLidarFrame = icp.getFinalTransformation();
+      //      pcl::getTranslationAndEulerAngles(correctionLidarFrame, x, y, z, roll, pitch, yaw);
+      // gtsam::Pose3 poseFrom = Pose3(Rot3::RzRyRx(roll, pitch, yaw), Point3(x, y, z));
+      Pose6D t_pose = Matrix2Pose6D(icp.getFinalTransformation().cast<double>());
+      gtsam::Pose3 poseFrom = Pose6D2Pose3(t_pose);
       gtsam::Pose3 poseTo = Pose3(Rot3::RzRyRx(0.0, 0.0, 0.0), Point3(0.0, 0.0, 0.0));
 
       mutex_pg_.lock();
@@ -510,6 +497,7 @@ void PGO::MapVisualization() {
 
 void PGO::ISAM2Update() {
   // called when a variable added
+  // 为什么更新2次，清点进去查看api介绍
   isam->update(gtSAMgraph, initialEstimate);
   isam->update();
 
@@ -664,9 +652,11 @@ void PGO::SaveMap() {
   pcl::io::savePCDFile(file_path + "trajectory.pcd", *poses);
   pcl::io::savePCDFile(file_path + "finalMap.pcd", *map);
 
+  std::cout << "save odom csv files and g2o" << std::endl;
+
   // 保存odom的csv
-  ROS_WARN("save odom csv files and g2o");
-  std::ofstream outFile, outFile2;
+  ROS_WARN("save odom csv files and xchu_g2o");
+  std::ofstream outFile, outFile2, outFile3;
 
   // csv
   /*outFile.open(file_path + "odom_final.csv", std::ios::out);
@@ -692,6 +682,7 @@ void PGO::SaveMap() {
   // kitti txt
   outFile.open(file_path + "odom_tum.txt", std::ios::out);
   //outFile2.open(file_path + "odom.txt", std::ios::out);
+  outFile3.open(file_path + "lidar_odom.txt", std::ios::out);
 
   Matrix4d velo2camera;
   velo2camera << 0, -1, 0, 0,
@@ -701,8 +692,9 @@ void PGO::SaveMap() {
 
   for (int j = 0; j < keyframePosesUpdated.size(); ++j) {
 
-    Matrix4d pose2 = Pose6D2Matrix(originPoses[j]);
+    //Matrix4d pose2 = Pose6D2Matrix(originPoses[j]);
     Pose6D new_pose = keyframePosesUpdated[j];
+    // kitti的gt是相机pose,所以需要把雷达pose转换到相机上。
     Matrix4d pose = velo2camera * Pose6D2Matrix(new_pose);
 
 //    outFile << std::setprecision(10) << pose(0, 0) << " " << pose(0, 1) << " " << pose(0, 2) << " " << pose(0, 3) << " "
@@ -722,24 +714,27 @@ void PGO::SaveMap() {
     outFile << std::setprecision(12) << time << " " << pose(0, 3) << " " << pose(1, 3) << " " << pose(2, 3) << " "
             << quat.x() << " " << quat.y() << " " << quat.z() << " " << quat.w()
             << std::endl;
+  }
 
+  // 写odom.txt
+  std::cout << "write lidar odom: " << originOdom.size() << std::endl;
+  for (int j = 0; j < originOdom.size(); ++j) {
+    nav_msgs::Odometry msg = *originOdom[j];
+
+    Matrix4d pose2 = GeometryToEigen(msg).matrix();
+    Matrix4d pose = velo2camera * pose2;
+
+    double time = msg.header.stamp.toSec() - time_stamp_;
+    Eigen::Matrix3d rot = pose.block<3, 3>(0, 0).matrix();
+    Eigen::Quaterniond quat(rot);
+    outFile3 << std::setprecision(12) << time << " " << pose(0, 3) << " " << pose(1, 3) << " " << pose(2, 3) << " "
+             << quat.x() << " " << quat.y() << " " << quat.z() << " " << quat.w()
+             << std::endl;
   }
 
   outFile.close();
-  //outFile2.close();
-
-
-
-
-
-
-
-
-
-
-
-
-
+  //  outFile2.close();
+  outFile3.close();
 
   // 同事保存g2o文件
   gtsam::writeG2o(gtSAMgraph, isamCurrentEstimate, file_path + "pose_graph.g2o");
@@ -761,6 +756,38 @@ void PGO::PublishPoseAndFrame() {
        node_idx++) // -1 is just delayed visualization (because sometimes mutexed while adding(push_back) a new one)
   {
     const Pose6D &pose_est = keyframePosesUpdated.at(node_idx); // upodated poses
+
+/*
+    // publish odom
+    nav_msgs::Odometry odomAftPGOthis;
+    odomAftPGOthis.header.frame_id = "map";
+    odomAftPGOthis.child_frame_id = "after_optimized";
+    odomAftPGOthis.header.stamp = ros::Time().fromSec(keyframeTimes[node_idx]);
+    odomAftPGOthis.pose.pose.position.x = keyframePosesUpdated.front().x;
+    odomAftPGOthis.pose.pose.position.y = keyframePosesUpdated.front().y;
+    odomAftPGOthis.pose.pose.position.z = keyframePosesUpdated.front().z;
+    odomAftPGOthis.pose.pose.orientation =
+        tf::createQuaternionMsgFromRollPitchYaw(keyframePosesUpdated.front().roll,
+                                                keyframePosesUpdated.front().pitch,
+                                                keyframePosesUpdated.front().yaw);
+    final_odom_pub.publish(odomAftPGOthis); // last pose
+
+
+    // tf
+    static tf::TransformBroadcaster br;
+    tf::Transform transform;
+    tf::Quaternion q;
+    transform.setOrigin(tf::Vector3(odomAftPGOthis.pose.pose.position.x,
+                                    odomAftPGOthis.pose.pose.position.y,
+                                    odomAftPGOthis.pose.pose.position.z));
+    q.setW(odomAftPGOthis.pose.pose.orientation.w);
+    q.setX(odomAftPGOthis.pose.pose.orientation.x);
+    q.setY(odomAftPGOthis.pose.pose.orientation.y);
+    q.setZ(odomAftPGOthis.pose.pose.orientation.z);
+    transform.setRotation(q);
+    br.sendTransform(tf::StampedTransform(transform, odomAftPGOthis.header.stamp, "map", "after_optimized"));
+*/
+
     if (counter % SKIP_FRAMES == 0) {
       *laserCloudMapPGO += *TransformCloud2Map(keyframeLaserClouds[node_idx], keyframePosesUpdated[node_idx]);
     }
@@ -771,7 +798,7 @@ void PGO::PublishPoseAndFrame() {
   // key poses
   sensor_msgs::PointCloud2 msg;
   pcl::toROSMsg(*keyframePoints, msg);
-  msg.header.frame_id = "camera_init";
+  msg.header.frame_id = "map";
   msg.header.stamp = ros::Time::now();
   pose_pub.publish(msg);
 
@@ -780,7 +807,7 @@ void PGO::PublishPoseAndFrame() {
   downSizePublishCloud.filter(*laserCloudMapPGO);
   sensor_msgs::PointCloud2 laserCloudMapPGOMsg;
   pcl::toROSMsg(*laserCloudMapPGO, laserCloudMapPGOMsg);
-  laserCloudMapPGOMsg.header.frame_id = "camera_init";
+  laserCloudMapPGOMsg.header.frame_id = "map";
   map_pub.publish(laserCloudMapPGOMsg);
 }
 
@@ -789,7 +816,7 @@ visualization_msgs::MarkerArray PGO::CreateMarker(const ros::Time &stamp) {
   visualization_msgs::Marker traj_marker, edge_marker, loop_marker;
 
   // node markers
-  traj_marker.header.frame_id = "camera_init";
+  traj_marker.header.frame_id = "map";
   traj_marker.header.stamp = stamp;
   traj_marker.ns = "nodes";
   traj_marker.id = 0;
@@ -804,7 +831,7 @@ visualization_msgs::MarkerArray PGO::CreateMarker(const ros::Time &stamp) {
   traj_marker.color = color;
 
   // edge markers
-  edge_marker.header.frame_id = "camera_init";
+  edge_marker.header.frame_id = "map";
   edge_marker.header.stamp = stamp;
   edge_marker.ns = "edges";
   edge_marker.id = 1;
@@ -838,7 +865,7 @@ visualization_msgs::MarkerArray PGO::CreateMarker(const ros::Time &stamp) {
 
   // loop markers
   if (loop_pairs_.size() > 0) {
-    loop_marker.header.frame_id = "camera_init";
+    loop_marker.header.frame_id = "map";
     loop_marker.header.stamp = stamp;
     loop_marker.ns = "loop";
     loop_marker.id = 2;

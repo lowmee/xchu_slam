@@ -110,13 +110,10 @@ class LidarOdom {
   double _tf_x, _tf_y, _tf_z, _tf_roll, _tf_pitch, _tf_yaw;
   Eigen::Matrix4f tf_b2l, tf_l2b;
 
-  // 重要变量参数 :: 用以指示是否使用imu,是否使用odom
   bool _use_imu = false;
   bool _use_odom = false;
   bool _imu_upside_down = false;  // 用以解决坐标系方向(正负变换)问题 (比如x变更为-x等)
   int method_type_temp = 0;
-
-  //pcl::PointCloud<pcl::PointXYZI>::Ptr localmap_ptr;
 
   // mutex
   std::mutex mutex_lock;
@@ -124,9 +121,9 @@ class LidarOdom {
   std::queue<sensor_msgs::ImuConstPtr> imu_queue_;
   std::queue<nav_msgs::OdometryConstPtr> odom_queue_;
 
-  pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterGlobalMap; // for global map visualization
-  pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterKeyFrames; // for global map visualization
-  pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterLocalmap; // for global map visualization
+  pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterGlobalMap;
+  pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterKeyFrames;
+  pcl::VoxelGrid<pcl::PointXYZI> downSizeFilterLocalmap;
 
   pcl::PointCloud<PointT>::Ptr cloud_keyposes_3d_;
   std::vector<Eigen::Matrix4f> cloud_keyposes_;
@@ -139,6 +136,7 @@ class LidarOdom {
 
   Eigen::Matrix4f t_localizer;
   Eigen::Matrix4f t_base_link;
+
  public:
   ros::NodeHandle nh;
 

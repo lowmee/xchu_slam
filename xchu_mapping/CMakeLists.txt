@@ -5,7 +5,6 @@ message("Compiler version is: ${CMAKE_SYSTEM_VERSION}")
 message("System version is: ${CMAKE_SYSTEM_NAME}")
 message("Architecture is: ${CMAKE_SYSTEM_PROCESSOR}")
 
-
 if ("${CMAKE_SYSTEM_NAME}" STREQUAL "Darwin")
     set(CMAKE_CXX_COMPILER clang++)
     set(CMAKE_C_COMPILER clang)
@@ -14,9 +13,10 @@ endif ()
 
 #add_compile_options(-std=c++17 -O0)
 set(CMAKE_BUILD_TYPE "Debug")
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 17) #[[scan context用到了一些c++17新特性，所以需要]]
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_LIST_DIR}/cmake")
 
+# Mac支持
 if (NOT MACOSX)
     find_package(OpenMP REQUIRED) #链接ndt_cpu库 get_max_thread_num
     if (OPENMP_FOUND)
@@ -46,7 +46,6 @@ else ()
     endif ()
 endif ()
 
-
 find_package(OpenCV REQUIRED)
 find_package(GTSAM REQUIRED)
 find_package(PCL REQUIRED)
@@ -63,7 +62,7 @@ find_package(catkin REQUIRED COMPONENTS
         message_generation
         cv_bridge
         image_transport
-        #        ndt_cpu
+        #        ndt_cpu  #[[这两个ndt的库默认打包成.so进行链接，如果自己要编译的话，在这里打开即可]]
         #        ndt_omp
         )
 
@@ -71,6 +70,7 @@ find_package(G2O REQUIRED)
 include_directories(SYSTEM ${G2O_INCLUDE_DIR} ${G2O_INCLUDE_DIRS})
 link_directories(${G2O_LIBRARY_DIRS})
 
+#[[ loop info现在暂时没用，原来准备吧loop detetction单独作为节点的]]
 add_message_files(FILES
         FloorCoeffs.msg
         LoopInfo.msg
@@ -100,14 +100,15 @@ include_directories(
 message("PCL Libraries include: ${PCL_LIBRARIES}")
 message("PCL version: ${PCL_VERSION}")
 
+# odom部分实现了一个ndt里程计，imu这些暂时没有调，因为kitti imu频率太低，无意义，后续换数据在适配
 add_executable(odom_node src/odom_node.cpp)
 target_link_libraries(odom_node ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenMP_LIBS} ${OMP_LIB} ndt_cpu ndt_omp)
 
-add_executable(filter_node
-        src/filter_node.cpp
-        )
+#[[ filter部分做了简单的基于法向量的地面分割，直接copy的hdl graph slam，目前待使用]]
+add_executable(filter_node src/filter_node.cpp)
 target_link_libraries(filter_node ${catkin_LIBRARIES} ${PCL_LIBRARIES})
 
+# pgo模块整体框架参考的sc lego loam
 add_executable(pgo_node
         src/pgo_node.cpp
         include/scancontext/Scancontext.cpp
@@ -135,32 +136,3 @@ else ()
             )
 endif ()
 
-# g2o
-add_executable(pgo_g2o_node
-        src/pgo_g2o_node.cpp
-#        src/g2o/graph_slam.cpp
-#        src/g2o/robust_kernel_io.cpp
-        include/scancontext/Scancontext.cpp
-        )
-target_link_libraries(pgo_g2o_node
-        ${catkin_LIBRARIES}
-        ${PCL_LIBRARIES}
-        ${G2O_TYPES_DATA}
-        ${G2O_CORE_LIBRARY}
-#        ${G2O_STUFF_LIBRARY}
-#        ${G2O_SOLVER_PCG}
-#        ${G2O_SOLVER_CSPARSE}
-#        ${G2O_SOLVER_CHOLMOD}
-#        ${G2O_TYPES_SLAM3D}
-#        ${G2O_TYPES_SLAM3D_ADDONS}
-        ${OpenCV_LIBS}
-        #        ${CERES_LIBRARIES}
-#        ${OpenCV_LIBRARIES}
-        )
-
-#add_executable(evaluate
-#        evaluate/evaluate_odometry.cpp
-#        evaluate/matrix.cpp
-#        evaluate/mail.h)
-#target_link_libraries(pgo_g2o_node
-#)

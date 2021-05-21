@@ -109,6 +109,7 @@ class PGO {
   std::mutex mutex_pose_;
 
   std::string save_dir_;
+  std::string odom_topic_;
 
   double time_stamp_ = 0.0;
   bool init_time = false;
@@ -119,6 +120,7 @@ class PGO {
   std::vector<pcl::PointCloud<PointT>::Ptr> keyframeLaserClouds;
   std::vector<std::pair<int, int> > loop_pairs_;
   std::vector<Pose6D> originPoses;
+  std::vector<nav_msgs::Odometry::ConstPtr> originOdom;
   std::vector<Pose6D> keyframePoses;
   std::vector<Pose6D> keyframePosesUpdated;
   std::vector<double> keyframeTimes;

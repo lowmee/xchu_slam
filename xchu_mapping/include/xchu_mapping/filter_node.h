@@ -57,6 +57,8 @@ class CloudFilter {
   std::mutex mutex_lock;
   std::queue<sensor_msgs::PointCloud2ConstPtr> cloud_queue;
 
+  std::string cloud_topic_;
+
   // plane params
   double tilt_deg = 0.0;
   double sensor_height = 2.0;

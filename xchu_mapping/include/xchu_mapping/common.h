@@ -16,6 +16,8 @@ inline double deg2rad(double degrees) {
   return degrees * M_PI / 180.0;
 }
 
+extern double filter_size = 0.5;
+
 struct Pose6D {
   double x;
   double y;
@@ -66,6 +68,32 @@ extern Eigen::Matrix4d Pose6D2Matrix(Pose6D p) {
   Eigen::AngleAxisd rot_z(p.yaw, Eigen::Vector3d::UnitZ());
   Eigen::Matrix4d mat = (tf_trans * rot_z * rot_y * rot_x).matrix();
   return mat;
+}
+
+extern Eigen::Isometry3d GeometryToEigen(nav_msgs::Odometry &pose_geo) {
+  Eigen::Isometry3d pose_eigen = Eigen::Isometry3d::Identity();
+  pose_eigen.rotate(Eigen::Quaterniond(pose_geo.pose.pose.orientation.w,
+                                       pose_geo.pose.pose.orientation.x,
+                                       pose_geo.pose.pose.orientation.y,
+                                       pose_geo.pose.pose.orientation.z));
+  pose_eigen.pretranslate(Eigen::Vector3d(pose_geo.pose.pose.position.x,
+                                          pose_geo.pose.pose.position.y,
+                                          pose_geo.pose.pose.position.z));
+  return pose_eigen;
+}
+
+extern Pose6D GeometryToPose6D(nav_msgs::Odometry &pose_geo) {
+  Eigen::Quaterniond quat(pose_geo.pose.pose.orientation.w,
+                          pose_geo.pose.pose.orientation.x,
+                          pose_geo.pose.pose.orientation.y,
+                          pose_geo.pose.pose.orientation.z);
+
+  Pose6D p;
+  p.x = pose_geo.pose.pose.position.x;
+  p.y = pose_geo.pose.pose.position.y;
+  p.z = pose_geo.pose.pose.position.z;
+  tf::Matrix3x3(tf::Quaternion(quat.x(), quat.y(), quat.z(), quat.w())).getRPY(p.roll, p.pitch, p.yaw);
+  return p;
 }
 
 #endif //SRC_XCHU_MAPPING_INCLUDE_XCHU_MAPPING_COMMON_H_
